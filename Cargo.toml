@@ -1,0 +1,19 @@
+[package]
+name = "rays"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+lto = "thin"
+#strip = true
+panic = "abort"
+opt-level = 3
+
+[dependencies]
+glam = "0.27.0"
+pixels = "0.13.0"
+winit_input_helper = "0.16.0"
+winit = {version = "0.29.15", features = ["rwh_05"]}
+rtbvh = "0.6.2"
+itertools = "0.13.0"
+rayon = "1.10.0"
