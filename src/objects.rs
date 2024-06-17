@@ -5,10 +5,30 @@ pub trait Hittable {
     fn get_color(&self) -> &Color;
 }
 
+pub struct Object {
+    pub tris: Vec<Triangle>,
+    pub bounding_box: BoxShape,
+}
+
+impl Object {
+    pub fn from(tris: Vec<Triangle>) -> Self {
+        let mut min = tris[0].a;
+        let mut max = tris[0].a;
+        for t in tris.iter() {
+            min = min.min(t.a).min(t.b).min(t.c);
+            max = max.max(t.a).max(t.b).max(t.c);
+        }
+        Object {
+            tris,
+            bounding_box: BoxShape { min, max },
+        }
+    }
+}
+
 pub struct Ray {
     pub origin: Vec3,
     pub dir: Vec3,
-    //pub inv_dir: Vec3,
+    pub inv_dir: Vec3,
 }
 
 pub struct Hit {
@@ -33,6 +53,18 @@ impl Color {
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
+
+    pub fn mul(&self, val: f32) -> Self {
+        Color {
+            r: (self.r as f32 * val) as u8,
+            g: (self.g as f32 * val) as u8,
+            b: (self.b as f32 * val) as u8,
+        }
+    }
+}
+
+pub struct Material {
+    pub albedo: f32,
 }
 
 #[derive(Debug)]
@@ -40,6 +72,7 @@ pub struct Triangle {
     pub a: Vec3,
     pub b: Vec3,
     pub c: Vec3,
+    pub normal: Vec3,
     pub color: Color,
 }
 
@@ -47,6 +80,11 @@ pub struct Sphere {
     pub center: Vec3,
     pub radius: f32,
     pub color: Color,
+}
+
+pub struct BoxShape {
+    pub min: Vec3,
+    pub max: Vec3,
 }
 
 impl Hittable for Sphere {
@@ -110,7 +148,10 @@ impl Hittable for Triangle {
 
         if t > f32::EPSILON {
             // ray intersection
-            Some(Hit { pos: ray.at(t - 0.01), t })
+            Some(Hit {
+                pos: ray.at(t) + (self.normal * 0.00001),
+                t,
+            })
         } else {
             // This means that there is a line intersection but not a ray intersection.
             None
@@ -118,5 +159,39 @@ impl Hittable for Triangle {
     }
     fn get_color(&self) -> &Color {
         &self.color
+    }
+}
+
+pub fn box_intersection_check(ray: &Ray, check_box: &BoxShape) -> bool {
+    let t1 = (check_box.min - ray.origin) * ray.inv_dir;
+    let t2 = (check_box.max - ray.origin) * ray.inv_dir;
+
+    let tmin = t1.min(t2);
+    let tmax = t1.max(t2);
+
+    let t_near = tmin.x.max(tmin.y).max(tmin.z);
+    let t_far = tmax.x.min(tmax.y).min(tmax.z);
+
+    t_near.min(0.0) <= t_far
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_works() {
+        let res = box_intersection_check(
+            &Ray {
+                origin: Vec3::new(0.0, 0.0, -2.0),
+                dir: Vec3::new(0.0, 0.0, 1.0),
+                inv_dir: Vec3::new(0.0, 0.0, 1.0).recip(),
+            },
+            &BoxShape {
+                min: Vec3::new(-1.0, -1.0, -1.0),
+                max: Vec3::new(1.0, 1.0, 1.0),
+            },
+        );
+        assert!(res == true);
     }
 }
