@@ -5,13 +5,20 @@ pub trait Hittable {
     fn get_color(&self) -> &Color;
 }
 
+pub struct World {
+    pub objects: Vec<Object>,
+    pub sun: Vec3
+}
+
+#[derive(Clone)]
 pub struct Object {
     pub tris: Vec<Triangle>,
     pub bounding_box: BoxShape,
+    pub material: Material
 }
 
 impl Object {
-    pub fn from(tris: Vec<Triangle>) -> Self {
+    pub fn from(tris: Vec<Triangle>, mat: Material) -> Self {
         let mut min = tris[0].a;
         let mut max = tris[0].a;
         for t in tris.iter() {
@@ -21,6 +28,7 @@ impl Object {
         Object {
             tris,
             bounding_box: BoxShape { min, max },
+            material: mat
         }
     }
 }
@@ -44,30 +52,48 @@ impl Ray {
 
 #[derive(Debug, Clone)]
 pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
 }
 
 impl Color {
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
+    pub fn new(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b }
     }
 
+    #[inline(always)]
+    pub fn from_u8(r: u8, g: u8, b: u8) -> Self {
+        Self { 
+            r: (r as f32) / 255.0,
+            g: (g as f32) / 255.0,
+            b: (b as f32) / 255.0,
+        }
+    }
+
+    #[inline(always)]
     pub fn mul(&self, val: f32) -> Self {
         Color {
-            r: (self.r as f32 * val) as u8,
-            g: (self.g as f32 * val) as u8,
-            b: (self.b as f32 * val) as u8,
+            r: self.r * val,
+            g: self.g * val,
+            b: self.b * val,
         }
     }
 }
+pub const BLACK: Color = Color { r: 0.0, g: 0.0, b: 0.0}; 
 
+#[derive(Clone)]
 pub struct Material {
     pub albedo: f32,
 }
 
-#[derive(Debug)]
+impl Material {
+    pub fn new(albedo: f32) -> Self {
+        Material { albedo: albedo / std::f32::consts::PI }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Triangle {
     pub a: Vec3,
     pub b: Vec3,
@@ -76,12 +102,14 @@ pub struct Triangle {
     pub color: Color,
 }
 
+#[derive(Clone)]
 pub struct Sphere {
     pub center: Vec3,
     pub radius: f32,
     pub color: Color,
 }
 
+#[derive(Clone)]
 pub struct BoxShape {
     pub min: Vec3,
     pub max: Vec3,
@@ -160,6 +188,14 @@ impl Hittable for Triangle {
     fn get_color(&self) -> &Color {
         &self.color
     }
+}
+
+pub fn is_inside_box(ray: &Ray, cb: &BoxShape) -> bool {
+    let o = ray.origin;
+    
+    o.x <= cb.max.x && o.x >= cb.min.x &&
+    o.x <= cb.max.y && o.y >= cb.min.y &&
+    o.x <= cb.max.z && o.z >= cb.min.z
 }
 
 pub fn box_intersection_check(ray: &Ray, check_box: &BoxShape) -> bool {
