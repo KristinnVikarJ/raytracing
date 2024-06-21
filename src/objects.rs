@@ -7,14 +7,14 @@ pub trait Hittable {
 
 pub struct World {
     pub objects: Vec<Object>,
-    pub sun: Vec3
+    pub sun: Vec3,
 }
 
 #[derive(Clone)]
 pub struct Object {
     pub tris: Vec<Triangle>,
     pub bounding_box: BoxShape,
-    pub material: Material
+    pub material: Material,
 }
 
 impl Object {
@@ -28,7 +28,7 @@ impl Object {
         Object {
             tris,
             bounding_box: BoxShape { min, max },
-            material: mat
+            material: mat,
         }
     }
 }
@@ -64,7 +64,7 @@ impl Color {
 
     #[inline(always)]
     pub fn from_u8(r: u8, g: u8, b: u8) -> Self {
-        Self { 
+        Self {
             r: (r as f32) / 255.0,
             g: (g as f32) / 255.0,
             b: (b as f32) / 255.0,
@@ -79,17 +79,34 @@ impl Color {
             b: self.b * val,
         }
     }
+
+    #[inline(always)]
+    pub fn add(&self, rhs: Color) -> Self {
+        Color {
+            r: self.r + rhs.r,
+            g: self.g + rhs.g,
+            b: self.b + rhs.b,
+        }
+    }
 }
-pub const BLACK: Color = Color { r: 0.0, g: 0.0, b: 0.0}; 
+pub const BLACK: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+};
 
 #[derive(Clone)]
 pub struct Material {
     pub albedo: f32,
+    pub reflectivity: f32,
 }
 
 impl Material {
-    pub fn new(albedo: f32) -> Self {
-        Material { albedo: albedo / std::f32::consts::PI }
+    pub fn new(albedo: f32, reflectivity: f32) -> Self {
+        Material {
+            albedo: albedo / std::f32::consts::PI,
+            reflectivity,
+        }
     }
 }
 
@@ -192,10 +209,13 @@ impl Hittable for Triangle {
 
 pub fn is_inside_box(ray: &Ray, cb: &BoxShape) -> bool {
     let o = ray.origin;
-    
-    o.x <= cb.max.x && o.x >= cb.min.x &&
-    o.x <= cb.max.y && o.y >= cb.min.y &&
-    o.x <= cb.max.z && o.z >= cb.min.z
+
+    o.x <= cb.max.x
+        && o.x >= cb.min.x
+        && o.x <= cb.max.y
+        && o.y >= cb.min.y
+        && o.x <= cb.max.z
+        && o.z >= cb.min.z
 }
 
 pub fn box_intersection_check(ray: &Ray, check_box: &BoxShape) -> bool {

@@ -3,7 +3,7 @@ mod objects;
 use glam::Vec3A as Vec3;
 use itertools::Itertools;
 use objects::{
-    box_intersection_check, BoxShape, Color, Hittable, Material, Object, Ray, Sphere, Triangle, World, BLACK
+    box_intersection_check, Color, Hittable, Material, Object, Ray, Triangle, World, BLACK,
 };
 use pixels::{Error, Pixels, SurfaceTexture};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -18,8 +18,8 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: usize = 500;
-const HEIGHT: usize = 500;
+const WIDTH: usize = 1000;
+const HEIGHT: usize = 1000;
 
 const SCALE: f32 = 1.0;
 
@@ -27,7 +27,7 @@ fn calculate_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     (b - a).cross(c - a).normalize()
 }
 
-fn read_obj(filename: &str) -> Vec<Triangle> {
+fn read_obj(filename: &str, offset: Vec3, color: Color) -> Vec<Triangle> {
     let mut verts = Vec::new();
     let mut tris = Vec::new();
     for line in read_to_string(filename).unwrap().lines() {
@@ -37,7 +37,7 @@ fn read_obj(filename: &str) -> Vec<Triangle> {
                 .filter_map(|s| s.parse::<f32>().ok())
                 .collect_tuple()
                 .unwrap();
-            verts.push(Vec3::new(a, b - 2.0, c + 6.0));
+            verts.push(Vec3::new(a, b, c) + offset);
         } else if let Some(stripped) = line.strip_prefix("f ") {
             let (a, b, c) = stripped
                 .split(' ')
@@ -49,24 +49,26 @@ fn read_obj(filename: &str) -> Vec<Triangle> {
                 b: verts[b - 1],
                 c: verts[c - 1],
                 normal: calculate_normal(verts[a - 1], verts[b - 1], verts[c - 1]),
-                color: Color::from_u8(0x50, 0xc8, 0x78),
+                color: color.clone(),
             });
         }
     }
     tris
 }
 
-fn trace_ray(ray: &Ray, world: &World) -> Color {
+fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
     let mut hit_tri = None;
     let mut hit_data = None;
     let mut hit_obj = None;
 
     let mut closest = f32::INFINITY;
 
+    let mut color = BLACK;
+
     for obj in world.objects.iter() {
-        if box_intersection_check(&ray, &obj.bounding_box) {
+        if box_intersection_check(ray, &obj.bounding_box) {
             for tri in obj.tris.iter() {
-                if let Some(hit) = tri.ray_hits(&ray, closest) {
+                if let Some(hit) = tri.ray_hits(ray, closest) {
                     if closest > hit.t {
                         closest = hit.t;
                         hit_tri = Some(tri);
@@ -90,45 +92,61 @@ fn trace_ray(ray: &Ray, world: &World) -> Color {
         };
 
         // We do a little cheating
-        if hit.normal.dot(sun_dir) < 0.0 {
-            return BLACK;
-        }
-
-        for tri in inside_obj.tris.iter() {
-            if tri.ray_hits(&sun_ray, closest).is_some() {
-                can_see_sun = false;
-                break;
+        if hit.normal.dot(sun_dir) > 0.0 {
+            for tri in inside_obj.tris.iter() {
+                if tri.ray_hits(&sun_ray, closest).is_some() {
+                    can_see_sun = false;
+                    break;
+                }
             }
-        }
-        if can_see_sun {
-            for obj in world.objects.iter() {
-                if !std::ptr::eq(obj, inside_obj) || box_intersection_check(&ray, &obj.bounding_box) {
-                    for tri in obj.tris.iter() {
-                        if tri.ray_hits(&sun_ray, closest).is_some() {
-                            can_see_sun = false;
-                            break;
+            if can_see_sun {
+                for obj in world.objects.iter() {
+                    if !std::ptr::eq(obj, inside_obj)
+                        || box_intersection_check(ray, &obj.bounding_box)
+                    {
+                        for tri in obj.tris.iter() {
+                            if tri.ray_hits(&sun_ray, closest).is_some() {
+                                can_see_sun = false;
+                                break;
+                            }
                         }
                     }
                 }
             }
+            if can_see_sun {
+                let hit_color = hit.get_color();
+                let light_power = hit.normal.dot(sun_dir); // Assuming intensity 1
+                color = hit_color.mul(light_power * inside_obj.material.albedo * 2.2)
+                // 2.2 is gamma
+            }
         }
-        if can_see_sun {
-            let color = hit.get_color();
-            let light_power = hit.normal.dot(sun_dir); // Assuming intensity 1
-            return color.mul(light_power * inside_obj.material.albedo * 2.2); // 2.2 is gamma
-        } else {
-            return BLACK;
+
+        if depth < 5 {
+            let reflection_dir = ray.dir - 2.0 * hit.normal * (ray.dir.dot(hit.normal));
+            color = color.mul(1.0 - inside_obj.material.reflectivity);
+            color = color.add(
+                trace_ray(
+                    &Ray {
+                        origin: hit_dat.pos,
+                        dir: reflection_dir,
+                        inv_dir: reflection_dir.recip(),
+                    },
+                    world,
+                    depth + 1,
+                )
+                .mul(inside_obj.material.reflectivity),
+            );
         }
     } else {
-       return Color::from_u8(0x87, 0xce, 0xeb);
+        return Color::from_u8(0x87, 0xce, 0xeb);
     }
+
+    color
 }
 
 fn draw(frame: &mut [u8], world: &World, t: f32) {
     let aspect_ratio = WIDTH / HEIGHT;
     let origin = Vec3::new(0.0, 0.0, 0.0);
-
-    let current_material = Material { albedo: 1.0 };
 
     let rows = (0..HEIGHT)
         .into_par_iter()
@@ -144,8 +162,8 @@ fn draw(frame: &mut [u8], world: &World, t: f32) {
                     dir: Vec3::new(xx, yy, 1.0),
                     inv_dir: Vec3::new(xx, yy, 1.0).recip(),
                 };
-                
-                row.push(trace_ray(&ray, world));
+
+                row.push(trace_ray(&ray, world, 1));
             }
             row
         })
@@ -185,26 +203,38 @@ fn main() -> Result<(), Error> {
 
     let start = Instant::now();
 
-    println!("hi");
-    let teapot: Vec<Triangle> = read_obj("teapot.obj");
+    let teapot: Vec<Triangle> = read_obj(
+        "teapot.obj",
+        Vec3::new(-3.0, -2.0, 7.0),
+        Color::from_u8(0x50, 0xc8, 0x78),
+    );
+    let teapot2: Vec<Triangle> = read_obj(
+        "teapot.obj",
+        Vec3::new(3.0, -2.0, 6.0),
+        Color::from_u8(0xFF, 0, 0),
+    );
     let mut objects: Vec<Object> = Vec::new();
-    objects.push(Object::from(teapot, Material::new(1.0)));
-    objects.push(Object::from(vec![
-        Triangle {
-            a: Vec3::new(-10000.0, -5.0, -10000.0),
-            b: Vec3::new(-10000.0, -5.0, 10000.0),
-            c: Vec3::new(10000.0, -5.0, 10000.0),
-            normal: Vec3::new(0.0, 1.0, 0.0),
-            color: Color::from_u8(128, 128, 128),
-        },
-        Triangle {
-            a: Vec3::new(-10000.0, -5.0, 10000.0),
-            b: Vec3::new(10000.0, -5.0, 10000.0),
-            c: Vec3::new(-10000.0, -5.0, 10000.0),
-            normal: Vec3::new(0.0, 1.0, 0.0),
-            color: Color::from_u8(0, 128, 0),
-        },
-    ], Material::new(1.0)));
+    objects.push(Object::from(teapot, Material::new(1.0, 1.0)));
+    objects.push(Object::from(teapot2, Material::new(1.0, 0.1)));
+    objects.push(Object::from(
+        vec![
+            Triangle {
+                a: Vec3::new(-10000.0, -5.0, -10000.0),
+                b: Vec3::new(-10000.0, -5.0, 10000.0),
+                c: Vec3::new(10000.0, -5.0, 10000.0),
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                color: Color::from_u8(128, 128, 128),
+            },
+            Triangle {
+                a: Vec3::new(-10000.0, -5.0, 10000.0),
+                b: Vec3::new(10000.0, -5.0, 10000.0),
+                c: Vec3::new(-10000.0, -5.0, 10000.0),
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                color: Color::from_u8(0, 128, 0),
+            },
+        ],
+        Material::new(1.0, 0.0),
+    ));
     println!(
         "len: {}",
         objects.iter().map(|obj| obj.tris.len()).sum::<usize>()
@@ -229,11 +259,7 @@ fn main() -> Result<(), Error> {
                     f32::cos(t / 10.0) * 100_000.0,
                 );
                 let o = objects.clone();
-                let world = World {
-                    objects: o,
-                    sun
-                };
-
+                let world = World { objects: o, sun };
 
                 draw(pixels.frame_mut(), &world, t);
 
