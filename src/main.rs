@@ -1,12 +1,15 @@
 mod objects;
+mod simd_accel;
 
 use glam::Vec3A as Vec3;
 use itertools::Itertools;
 use objects::{
-    box_intersection_check, Color, Hittable, Material, Object, Ray, Triangle, World, BLACK,
+    box_intersection_check, Color, Hit, Hittable, Material, Object, Ray, Triangle, World, BLACK
 };
 use pixels::{Error, Pixels, SurfaceTexture};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use simd_accel::{extract_f32_from_m256, pack_triangles, ray_to_avx};
+use std::arch::x86_64::_mm256_set1_ps;
 use std::fs::read_to_string;
 use std::{process, time::Instant};
 use winit::{
@@ -62,18 +65,55 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
     let mut hit_obj = None;
 
     let mut closest = f32::INFINITY;
+    let mut closest_splat = unsafe {_mm256_set1_ps(closest)};
 
     let mut color = BLACK;
 
+    let mut triangle_tmp = Vec::with_capacity(8);
     for obj in world.objects.iter() {
         if box_intersection_check(ray, &obj.bounding_box) {
             for tri in obj.tris.iter() {
-                if let Some(hit) = tri.ray_hits(ray, closest) {
-                    if closest > hit.t {
-                        closest = hit.t;
-                        hit_tri = Some(tri);
-                        hit_obj = Some(obj);
-                        hit_data = Some(hit);
+                triangle_tmp.push(tri);
+                if triangle_tmp.len() == 8 {
+                    let packed = pack_triangles(&triangle_tmp);
+                    let (ray_origin, ray_direction) = ray_to_avx(&ray);
+                    let (t_values, hit_mask) = packed.intersect(ray_origin, ray_direction, closest_splat);
+                    let t_arr = extract_f32_from_m256(t_values);
+                    if hit_mask != 0xFF {
+                        // At least 1 hit!
+                        for i in 0..8 {
+                            if t_arr[i] > 0.0 && closest > t_arr[i] {
+                                closest = t_arr[i];
+                                closest_splat = unsafe {_mm256_set1_ps(closest)};
+                                hit_tri = Some(triangle_tmp[i]);
+                                hit_obj = Some(obj);
+                                hit_data = Some(Hit {
+                                    pos: ray.at(t_arr[i]) + (triangle_tmp[i].normal * 0.00001),
+                                    t: t_arr[i]
+                                });
+                            }
+                        }
+                    }
+                    triangle_tmp.clear();
+                }
+            }
+            // TODO: handle rest
+            if triangle_tmp.len() > 0 {
+                let packed = pack_triangles(&triangle_tmp);
+                let (ray_origin, ray_direction) = ray_to_avx(&ray);
+                let (t_values, hit_mask) = packed.intersect(ray_origin, ray_direction, closest_splat);
+                let t_arr = extract_f32_from_m256(t_values);
+                if hit_mask != 0xFF {
+                    // At least 1 hit!
+                    for i in 0..8 {
+                        if t_arr[i] > 0.0 && closest > t_arr[i] {
+                            hit_tri = Some(triangle_tmp[i]);
+                            hit_obj = Some(obj);
+                            hit_data = Some(Hit {
+                                pos: ray.at(t_arr[i]) + (triangle_tmp[i].normal * 0.00001),
+                                t: t_arr[i]
+                            });
+                        }
                     }
                 }
             }
@@ -149,7 +189,7 @@ fn draw(frame: &mut [u8], world: &World, t: f32) {
     let origin = Vec3::new(0.0, 0.0, 0.0);
 
     let rows = (0..HEIGHT)
-        .into_par_iter()
+        //.into_par_iter()
         .map(|y| {
             let mut row = Vec::with_capacity(WIDTH);
             for x in 0..WIDTH {

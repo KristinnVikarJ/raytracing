@@ -1,3 +1,5 @@
+use std::arch::x86_64::__m256;
+
 use glam::Vec3A as Vec3;
 
 pub trait Hittable {
@@ -119,6 +121,13 @@ pub struct Triangle {
     pub color: Color,
 }
 
+pub struct PackedTriangles {
+    pub e1: [__m256; 3],
+    pub e2: [__m256; 3],
+    pub v0: [__m256; 3],
+    pub mask: __m256,
+}
+
 #[derive(Clone)]
 pub struct Sphere {
     pub center: Vec3,
@@ -175,14 +184,14 @@ impl Hittable for Triangle {
         if det > -f32::EPSILON && det < f32::EPSILON {
             return None;
         }
-
+        
         let inv_det = 1.0 / det;
         let s = ray.origin - self.a;
         let u = inv_det * s.dot(ray_cross_e2);
         if !(0.0..=1.0).contains(&u) {
             return None;
         }
-
+        
         let s_cross_e1 = s.cross(e1);
         let v = inv_det * ray.dir.dot(s_cross_e1);
         if v < 0.0 || u + v > 1.0 {
