@@ -71,6 +71,8 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
 
     let mut triangle_tmp = Vec::with_capacity(8);
     let mut c = 0;
+    let (ray_origin, ray_direction) = ray_to_avx(&ray);
+
     for obj in world.objects.iter() {
         if box_intersection_check(ray, &obj.bounding_box) {
             for tri in obj.tris.iter() {
@@ -78,7 +80,6 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                 c += 1;
                 if c == 8 {
                     let packed = pack_triangles(&triangle_tmp);
-                    let (ray_origin, ray_direction) = ray_to_avx(&ray);
                     let (t_values, hit_mask) =
                         packed.intersect(ray_origin, ray_direction, closest_splat);
                     if hit_mask != 0xFF {
@@ -104,7 +105,6 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
 
             if c > 0 {
                 let packed = pack_triangles(&triangle_tmp);
-                let (ray_origin, ray_direction) = ray_to_avx(&ray);
                 let (t_values, hit_mask) =
                     packed.intersect(ray_origin, ray_direction, closest_splat);
                 if hit_mask != 0xFF {
@@ -121,6 +121,7 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                         }
                     }
                 }
+                triangle_tmp.clear()
             }
         }
     }
@@ -135,14 +136,34 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
             dir: sun_dir,
             inv_dir: sun_dir.recip(),
         };
+        let (ray_origin, ray_direction) = ray_to_avx(&sun_ray);
 
         // We do a little cheating
         if hit.normal.dot(sun_dir) > 0.0 {
             for tri in inside_obj.tris.iter() {
-                if tri.ray_hits(&sun_ray, closest).is_some() {
-                    can_see_sun = false;
-                    break;
+                triangle_tmp.push(tri);
+                c += 1;
+                if c == 8 {
+                    let packed = pack_triangles(&triangle_tmp);
+                    let (_, hit_mask) =
+                        packed.intersect(ray_origin, ray_direction, closest_splat);
+                    if hit_mask != 0xFF {
+                        can_see_sun = false;
+                        break;
+                    }
+                    triangle_tmp.clear();
+                    c = 0;
                 }
+            }
+            if c > 0 {
+                let packed = pack_triangles(&triangle_tmp);
+                let (_, hit_mask) =
+                    packed.intersect(ray_origin, ray_direction, closest_splat);
+                if hit_mask != 0xFF {
+                    can_see_sun = false;
+                }
+                triangle_tmp.clear();
+                c = 0;
             }
             if can_see_sun {
                 for obj in world.objects.iter() {
@@ -150,10 +171,31 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                         || box_intersection_check(ray, &obj.bounding_box)
                     {
                         for tri in obj.tris.iter() {
-                            if tri.ray_hits(&sun_ray, closest).is_some() {
-                                can_see_sun = false;
-                                break;
+                            triangle_tmp.push(tri);
+                            c += 1;
+                            if c == 8 {
+                                let packed = pack_triangles(&triangle_tmp);
+                                let (_, hit_mask) =
+                                    packed.intersect(ray_origin, ray_direction, closest_splat);
+                                if hit_mask != 0xFF {
+                                    can_see_sun = false;
+                                    break;
+                                }
+                                triangle_tmp.clear();
+                                c = 0;
                             }
+                        }
+                        if c > 0 {
+                            let packed = pack_triangles(&triangle_tmp);
+                            let (_, hit_mask) =
+                                packed.intersect(ray_origin, ray_direction, closest_splat);
+                            if hit_mask != 0xFF {
+                                can_see_sun = false;
+                            }
+                            triangle_tmp.clear()
+                        }
+                        if !can_see_sun {
+                            break;
                         }
                     }
                 }
