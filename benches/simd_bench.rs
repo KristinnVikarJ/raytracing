@@ -1,3 +1,5 @@
+use std::{thread::sleep, time::Duration};
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use glam::Vec3A;
 use rays::{pack_triangles, Color, Triangle};
@@ -62,6 +64,7 @@ fn benchmark_pack_triangles(c: &mut Criterion) {
         },
     ];
 
+    sleep(Duration::from_secs(30)); // let cpu cool down after compile
     c.bench_function("pack_triangles", |b| {
         b.iter(|| pack_triangles(black_box(&triangles.iter().collect::<Vec<&Triangle>>())))
     });

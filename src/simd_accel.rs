@@ -1,4 +1,3 @@
-use glam::Vec3A;
 use std::arch::x86_64::*;
 
 use crate::objects::{PackedTriangles, Ray, Triangle};
@@ -19,23 +18,22 @@ pub fn pack_triangles(triangles: &[&Triangle]) -> PackedTriangles {
 
     // Load triangle vertices into arrays
     for i in 0..count {
-        /* 
+        /*
         let a = triangles[i].a.to_array();
         let b = triangles[i].b.to_array();
         let c = triangles[i].c.to_array();
         */
         let a = triangles[i].b - triangles[i].a;
-        let b = triangles[i].c - triangles[i].a;
-        let c = triangles[i].a;
-
         a_x[i] = a[0];
         a_y[i] = a[1];
         a_z[i] = a[2];
 
+        let b = triangles[i].c - triangles[i].a;
         b_x[i] = b[0];
         b_y[i] = b[1];
         b_z[i] = b[2];
 
+        let c = triangles[i].a;
         c_x[i] = c[0];
         c_y[i] = c[1];
         c_z[i] = c[2];
@@ -93,18 +91,49 @@ pub fn pack_triangles(triangles: &[&Triangle]) -> PackedTriangles {
             )
         },
     ];
+    let mask = if count != 8 {
+        // Create the mask, setting the lower bits according to the number of triangles
+        u8_mask_to_m256(((1u16 << count) - 1) as u8 ^ 0xFF)
+    } else {
+        unsafe { _mm256_castsi256_ps(_mm256_set1_epi8(0)) } // 1's represent masked out
+    };
 
-    // Create the mask, setting the lower bits according to the number of triangles
-    let mask = u8_mask_to_m256(((1u16 << count) - 1) as u8 ^ 0xFF);
-
-    PackedTriangles { e1: a, e2: b, v0: c, mask }
+    PackedTriangles {
+        e1: a,
+        e2: b,
+        v0: c,
+        mask,
+    }
 }
 
+#[repr(C)]
+union C {
+    a: __m256i,
+    c: [i8; 32],
+}
+
+const BITMASK: __m256i = unsafe {
+    C {
+        c: [
+            1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 8, 8, 8, 8, 16, 16, 16, 16, 32, 32, 32, 32, 64, 64,
+            64, 64, -128, -128, -128, -128,
+        ],
+    }
+    .a
+};
+
 #[inline(always)]
-fn u8_mask_to_m256(mask: u8) -> __m256 {
-    let mask_array: [u8; 32] = [mask; 32]; // Replicate the u8 mask across all 32 bytes
-    let mask_ptr = mask_array.as_ptr() as *const __m256i;
-    unsafe { _mm256_castsi256_ps(_mm256_loadu_si256(mask_ptr)) }
+fn u8_mask_to_m256(value: u8) -> __m256 {
+    unsafe {
+        // Create a __m256i register with the value repeated across all elements
+        let broadcast_value = _mm256_set1_epi8(value as i8);
+
+        // Use a comparison to generate the mask
+        let mask_i = _mm256_cmpeq_epi8(_mm256_and_si256(broadcast_value, BITMASK), BITMASK);
+
+        // Cast the __m256i register to a __m256 register
+        _mm256_castsi256_ps(mask_i)
+    }
 }
 
 #[inline(always)]
@@ -179,32 +208,37 @@ pub fn ray_to_avx(ray: &Ray) -> ([__m256; 3], [__m256; 3]) {
         let direction_y = _mm256_set1_ps(ray.dir.y);
         let direction_z = _mm256_set1_ps(ray.dir.z);
 
-        ([origin_x, origin_y, origin_z], [direction_x, direction_y, direction_z])
+        (
+            [origin_x, origin_y, origin_z],
+            [direction_x, direction_y, direction_z],
+        )
     }
 }
 
 impl PackedTriangles {
-    pub fn intersect(&self, ray_origin: [__m256; 3], ray_direction: [__m256; 3], ray_length: __m256) -> (__m256, i32) {
+    pub fn intersect(
+        &self,
+        ray_origin: [__m256; 3],
+        ray_direction: [__m256; 3],
+        ray_length: __m256,
+    ) -> (__m256, i32) {
         unsafe {
             let mut q = [_mm256_undefined_ps(); 3];
             avx_multi_cross(&mut q, ray_direction, self.e2);
 
             let a = avx_multi_dot(self.e1, q);
-            //println!("q: {:?}", q);
-            //println!("a: {:?}", a);
 
             let f = _mm256_div_ps(one_m256(), a);
-            
+
             let mut s = [_mm256_undefined_ps(); 3];
             avx_multi_sub(&mut s, ray_origin, self.v0);
-            
+
             let u = _mm256_mul_ps(f, avx_multi_dot(s, q));
-            
+
             let mut r = [_mm256_undefined_ps(); 3];
             avx_multi_cross(&mut r, s, self.e1);
-            
+
             let v = _mm256_mul_ps(f, avx_multi_dot(ray_direction, r));
-            //println!("v: {:?}", v);
 
             let t = _mm256_mul_ps(f, avx_multi_dot(self.e2, r));
 
@@ -223,11 +257,8 @@ impl PackedTriangles {
 
             failed = _mm256_or_ps(failed, _mm256_cmp_ps(t, zero_m256(), _CMP_LT_OQ));
 
-            failed = _mm256_or_ps(
-                failed,
-                _mm256_cmp_ps(t, ray_length, _CMP_GT_OQ),
-            );
-            
+            failed = _mm256_or_ps(failed, _mm256_cmp_ps(t, ray_length, _CMP_GT_OQ));
+
             failed = _mm256_or_ps(failed, self.mask);
 
             let t_results = _mm256_blendv_ps(t, minus_one_m256(), failed);
@@ -243,7 +274,6 @@ mod tests {
 
     use super::*;
     use glam::Vec3A;
-    use std::arch::x86_64::*;
 
     fn almost_equal(a: f32, b: f32, epsilon: f32) -> bool {
         (a - b).abs() < epsilon
