@@ -4,105 +4,84 @@ use crate::objects::{PackedTriangles, Ray, Triangle};
 
 pub fn pack_triangles(triangles: &[&Triangle]) -> PackedTriangles {
     // Initialize arrays to hold 8 values for each coordinate component
-    let mut a_x = [0.0; 8];
-    let mut a_y = [0.0; 8];
-    let mut a_z = [0.0; 8];
-    let mut b_x = [0.0; 8];
-    let mut b_y = [0.0; 8];
-    let mut b_z = [0.0; 8];
-    let mut c_x = [0.0; 8];
-    let mut c_y = [0.0; 8];
-    let mut c_z = [0.0; 8];
+    let mut e1_x = [0.0; 8];
+    let mut e1_y = [0.0; 8];
+    let mut e1_z = [0.0; 8];
+    let mut e2_x = [0.0; 8];
+    let mut e2_y = [0.0; 8];
+    let mut e2_z = [0.0; 8];
+    let mut v0_x = [0.0; 8];
+    let mut v0_y = [0.0; 8];
+    let mut v0_z = [0.0; 8];
 
     let count = triangles.len().min(8);
 
     // Load triangle vertices into arrays
     for i in 0..count {
-        /*
-        let a = triangles[i].a.to_array();
-        let b = triangles[i].b.to_array();
-        let c = triangles[i].c.to_array();
-        */
-        let a = triangles[i].b - triangles[i].a;
-        a_x[i] = a[0];
-        a_y[i] = a[1];
-        a_z[i] = a[2];
+        let e1 = triangles[i].b;
+        e1_x[i] = e1[0];
+        e1_y[i] = e1[1];
+        e1_z[i] = e1[2];
 
-        let b = triangles[i].c - triangles[i].a;
-        b_x[i] = b[0];
-        b_y[i] = b[1];
-        b_z[i] = b[2];
+        let e2 = triangles[i].c;
+        e2_x[i] = e2[0];
+        e2_y[i] = e2[1];
+        e2_z[i] = e2[2];
 
-        let c = triangles[i].a;
-        c_x[i] = c[0];
-        c_y[i] = c[1];
-        c_z[i] = c[2];
+        let v0 = triangles[i].a;
+        v0_x[i] = v0[0];
+        v0_y[i] = v0[1];
+        v0_z[i] = v0[2];
     }
+    unsafe {
+        // Create __m256 vectors from the arrays
+        let a = [
+            _mm256_set_ps(
+                e1_x[7], e1_x[6], e1_x[5], e1_x[4], e1_x[3], e1_x[2], e1_x[1], e1_x[0],
+            ),
+            _mm256_set_ps(
+                e1_y[7], e1_y[6], e1_y[5], e1_y[4], e1_y[3], e1_y[2], e1_y[1], e1_y[0],
+            ),
+            _mm256_set_ps(
+                e1_z[7], e1_z[6], e1_z[5], e1_z[4], e1_z[3], e1_z[2], e1_z[1], e1_z[0],
+            ),
+        ];
+        let b = [
+            _mm256_set_ps(
+                e2_x[7], e2_x[6], e2_x[5], e2_x[4], e2_x[3], e2_x[2], e2_x[1], e2_x[0],
+            ),
+            _mm256_set_ps(
+                e2_y[7], e2_y[6], e2_y[5], e2_y[4], e2_y[3], e2_y[2], e2_y[1], e2_y[0],
+            ),
+            _mm256_set_ps(
+                e2_z[7], e2_z[6], e2_z[5], e2_z[4], e2_z[3], e2_z[2], e2_z[1], e2_z[0],
+            ),
+        ];
+        let v0 = [
+            _mm256_set_ps(
+                v0_x[7], v0_x[6], v0_x[5], v0_x[4], v0_x[3], v0_x[2], v0_x[1], v0_x[0],
+            ),
+            _mm256_set_ps(
+                v0_y[7], v0_y[6], v0_y[5], v0_y[4], v0_y[3], v0_y[2], v0_y[1], v0_y[0],
+            ),
+            _mm256_set_ps(
+                v0_z[7], v0_z[6], v0_z[5], v0_z[4], v0_z[3], v0_z[2], v0_z[1], v0_z[0],
+            ),
+        ];
 
-    // Create __m256 vectors from the arrays
-    let a = [
-        unsafe {
-            _mm256_set_ps(
-                a_x[7], a_x[6], a_x[5], a_x[4], a_x[3], a_x[2], a_x[1], a_x[0],
-            )
-        },
-        unsafe {
-            _mm256_set_ps(
-                a_y[7], a_y[6], a_y[5], a_y[4], a_y[3], a_y[2], a_y[1], a_y[0],
-            )
-        },
-        unsafe {
-            _mm256_set_ps(
-                a_z[7], a_z[6], a_z[5], a_z[4], a_z[3], a_z[2], a_z[1], a_z[0],
-            )
-        },
-    ];
-    let b = [
-        unsafe {
-            _mm256_set_ps(
-                b_x[7], b_x[6], b_x[5], b_x[4], b_x[3], b_x[2], b_x[1], b_x[0],
-            )
-        },
-        unsafe {
-            _mm256_set_ps(
-                b_y[7], b_y[6], b_y[5], b_y[4], b_y[3], b_y[2], b_y[1], b_y[0],
-            )
-        },
-        unsafe {
-            _mm256_set_ps(
-                b_z[7], b_z[6], b_z[5], b_z[4], b_z[3], b_z[2], b_z[1], b_z[0],
-            )
-        },
-    ];
-    let c = [
-        unsafe {
-            _mm256_set_ps(
-                c_x[7], c_x[6], c_x[5], c_x[4], c_x[3], c_x[2], c_x[1], c_x[0],
-            )
-        },
-        unsafe {
-            _mm256_set_ps(
-                c_y[7], c_y[6], c_y[5], c_y[4], c_y[3], c_y[2], c_y[1], c_y[0],
-            )
-        },
-        unsafe {
-            _mm256_set_ps(
-                c_z[7], c_z[6], c_z[5], c_z[4], c_z[3], c_z[2], c_z[1], c_z[0],
-            )
-        },
-    ];
-    let mask = if count != 8 {
-        // Create the mask, setting the lower bits according to the number of triangles
-        u8_mask_to_m256(((1u16 << count) - 1) as u8 ^ 0xFF)
-    } else {
-        unsafe { _mm256_castsi256_ps(_mm256_set1_epi8(0)) } // 1's represent masked out
-    };
+        let mut e1 = [_mm256_undefined_ps(); 3];
+        let mut e2 = [_mm256_undefined_ps(); 3];
+        avx_multi_sub(&mut e1, a, v0);
+        avx_multi_sub(&mut e2, b, v0);
 
-    PackedTriangles {
-        e1: a,
-        e2: b,
-        v0: c,
-        mask,
+        let mask = if count != 8 {
+            // Create the mask, setting the lower bits according to the number of triangles
+            u8_mask_to_m256(((1u16 << count) - 1) as u8 ^ 0xFF)
+        } else {
+            _mm256_castsi256_ps(_mm256_set1_epi8(0)) // 1's represent masked out
+        };
+
+        PackedTriangles { e1, e2, v0, mask }
     }
 }
 
