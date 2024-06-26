@@ -1,8 +1,11 @@
 use std::arch::x86_64::*;
 
+use glam::Vec3;
+
 use crate::objects::{PackedTriangles, Ray, Triangle};
 
-pub fn pack_triangles(triangles: &[&Triangle]) -> PackedTriangles {
+#[inline(always)]
+pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles {
     // Initialize arrays to hold 8 values for each coordinate component
     let mut e1_x = [0.0; 8];
     let mut e1_y = [0.0; 8];
@@ -18,17 +21,17 @@ pub fn pack_triangles(triangles: &[&Triangle]) -> PackedTriangles {
 
     // Load triangle vertices into arrays
     for i in 0..count {
-        let e1 = triangles[i].b;
+        let e1 = verts[triangles[i].b as usize];
         e1_x[i] = e1[0];
         e1_y[i] = e1[1];
         e1_z[i] = e1[2];
 
-        let e2 = triangles[i].c;
+        let e2 = verts[triangles[i].c as usize];
         e2_x[i] = e2[0];
         e2_y[i] = e2[1];
         e2_z[i] = e2[2];
 
-        let v0 = triangles[i].a;
+        let v0 = verts[triangles[i].a as usize];
         v0_x[i] = v0[0];
         v0_y[i] = v0[1];
         v0_z[i] = v0[2];
@@ -249,10 +252,7 @@ impl PackedTriangles {
 
 #[cfg(test)]
 mod tests {
-    use crate::objects::Color;
-
     use super::*;
-    use glam::Vec3A;
 
     fn almost_equal(a: f32, b: f32, epsilon: f32) -> bool {
         (a - b).abs() < epsilon
@@ -268,25 +268,21 @@ mod tests {
     #[test]
     fn test_pack_triangles() {
         let epsilon = 1e-6;
+        let verts = vec![
+            Vec3::new(1.0, 1.1, 1.2),
+            Vec3::new(2.0, 2.1, 2.2),
+            Vec3::new(3.0, 3.1, 3.2),
+            Vec3::new(4.0, 4.1, 4.2),
+            Vec3::new(5.0, 5.1, 5.2),
+            Vec3::new(6.0, 6.1, 6.2),
+        ];
         let triangles = vec![
-            Triangle {
-                a: Vec3A::new(1.0, 1.1, 1.2),
-                b: Vec3A::new(2.0, 2.1, 2.2),
-                c: Vec3A::new(3.0, 3.1, 3.2),
-                normal: Vec3A::new(0.0, 0.0, 1.0),
-                color: Color::from_u8(255, 0, 0),
-            },
-            Triangle {
-                a: Vec3A::new(4.0, 4.1, 4.2),
-                b: Vec3A::new(5.0, 5.1, 5.2),
-                c: Vec3A::new(6.0, 6.1, 6.2),
-                normal: Vec3A::new(0.0, 0.0, 1.0),
-                color: Color::from_u8(0, 255, 0),
-            },
+            Triangle { a: 0, b: 1, c: 2 },
+            Triangle { a: 0, b: 1, c: 2 },
             // Add more triangles if necessary
         ];
 
-        let packet = pack_triangles(&triangles.iter().collect::<Vec<&Triangle>>());
+        let packet = pack_triangles(&triangles, &verts);
 
         unsafe {
             assert_eq!(
@@ -298,9 +294,9 @@ mod tests {
 
         // Check the packed coordinates
         for i in 0..triangles.len() {
-            let a = triangles[i].a.to_array();
-            let b = triangles[i].b.to_array();
-            let c = triangles[i].c.to_array();
+            let a = verts[triangles[i].a as usize].to_array();
+            let b = verts[triangles[i].b as usize].to_array();
+            let c = verts[triangles[i].c as usize].to_array();
 
             assert!(almost_equal(
                 extract_m256_element(packet.e1[0], i),

@@ -1,10 +1,13 @@
 use std::arch::x86_64::__m256;
 
-use glam::Vec3A as Vec3;
+use glam::Vec3;
+
+pub fn calculate_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    (b - a).cross(c - a).normalize()
+}
 
 pub trait Hittable {
-    fn ray_hits(&self, ray: &Ray, max_dist: f32) -> Option<Hit>;
-    fn get_color(&self) -> &Color;
+    fn ray_hits(&self, ray: &Ray, max_dist: f32, verts: &[Vec3]) -> Option<f32>;
 }
 
 pub struct World {
@@ -15,20 +18,29 @@ pub struct World {
 #[derive(Clone)]
 pub struct Object {
     pub tris: Vec<Triangle>,
+    pub tri_data: Vec<TriangleData>,
+    pub verts: Vec<Vec3>,
     pub bounding_box: BoxShape,
     pub material: Material,
 }
 
 impl Object {
-    pub fn from(tris: Vec<Triangle>, mat: Material) -> Self {
-        let mut min = tris[0].a;
-        let mut max = tris[0].a;
-        for t in tris.iter() {
-            min = min.min(t.a).min(t.b).min(t.c);
-            max = max.max(t.a).max(t.b).max(t.c);
+    pub fn from(
+        tris: Vec<Triangle>,
+        tri_data: Vec<TriangleData>,
+        verts: Vec<Vec3>,
+        mat: Material,
+    ) -> Self {
+        let mut min = verts[0];
+        let mut max = verts[0];
+        for t in verts.iter() {
+            min = min.min(*t).min(*t).min(*t);
+            max = max.max(*t).max(*t).max(*t);
         }
         Object {
             tris,
+            tri_data,
+            verts,
             bounding_box: BoxShape { min, max },
             material: mat,
         }
@@ -39,11 +51,6 @@ pub struct Ray {
     pub origin: Vec3,
     pub dir: Vec3,
     pub inv_dir: Vec3,
-}
-
-pub struct Hit {
-    pub pos: Vec3,
-    pub t: f32,
 }
 
 impl Ray {
@@ -114,11 +121,31 @@ impl Material {
 
 #[derive(Debug, Clone)]
 pub struct Triangle {
-    pub a: Vec3,
-    pub b: Vec3,
-    pub c: Vec3,
+    pub a: u32,
+    pub b: u32,
+    pub c: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct TriangleData {
     pub normal: Vec3,
     pub color: Color,
+}
+
+pub fn new_triangle(
+    a: u32,
+    b: u32,
+    c: u32,
+    verts: &[Vec3],
+    color: Color,
+) -> (Triangle, TriangleData) {
+    (
+        Triangle { a, b, c },
+        TriangleData {
+            normal: calculate_normal(verts[a as usize], verts[b as usize], verts[c as usize]),
+            color,
+        },
+    )
 }
 
 pub struct PackedTriangles {
@@ -132,7 +159,6 @@ pub struct PackedTriangles {
 pub struct Sphere {
     pub center: Vec3,
     pub radius: f32,
-    pub color: Color,
 }
 
 #[derive(Clone)]
@@ -142,7 +168,7 @@ pub struct BoxShape {
 }
 
 impl Hittable for Sphere {
-    fn ray_hits(&self, ray: &Ray, max_dist: f32) -> Option<Hit> {
+    fn ray_hits(&self, ray: &Ray, max_dist: f32, _: &[Vec3]) -> Option<f32> {
         let oc = ray.origin - self.center;
         let a = ray.dir.length_squared();
         let half_b = oc.dot(ray.dir);
@@ -152,31 +178,25 @@ impl Hittable for Sphere {
         if discriminant >= 0.0 {
             let sqrtd = discriminant.sqrt();
             let root_a = ((-half_b) - sqrtd) / a;
-            let root_b = ((-half_b) + sqrtd) / a;
+            //let root_b = ((-half_b) + sqrtd) / a;
 
             // Optimization: root_a is always closer? (not sure if 100% true)
             // If weird behavior revert to in [root_a, root_b]
 
             for root in [root_a].into_iter() {
                 if root < max_dist {
-                    return Some(Hit {
-                        pos: ray.at(root),
-                        t: root,
-                    });
+                    return Some(root);
                 }
             }
         }
         None
     }
-    fn get_color(&self) -> &Color {
-        &self.color
-    }
 }
 
 impl Hittable for Triangle {
-    fn ray_hits(&self, ray: &Ray, _: f32) -> Option<Hit> {
-        let e1 = self.b - self.a;
-        let e2 = self.c - self.a;
+    fn ray_hits(&self, ray: &Ray, min: f32, verts: &[Vec3]) -> Option<f32> {
+        let e1 = verts[self.b as usize] - verts[self.a as usize];
+        let e2 = verts[self.c as usize] - verts[self.a as usize];
 
         let ray_cross_e2 = ray.dir.cross(e2);
         let det = e1.dot(ray_cross_e2);
@@ -186,7 +206,7 @@ impl Hittable for Triangle {
         }
 
         let inv_det = 1.0 / det;
-        let s = ray.origin - self.a;
+        let s = ray.origin - verts[self.a as usize];
         let u = inv_det * s.dot(ray_cross_e2);
         if !(0.0..=1.0).contains(&u) {
             return None;
@@ -200,19 +220,13 @@ impl Hittable for Triangle {
         // At this stage we can compute t to find out where the intersection point is on the line.
         let t = inv_det * e2.dot(s_cross_e1);
 
-        if t > f32::EPSILON {
+        if t > f32::EPSILON && t > min {
             // ray intersection
-            Some(Hit {
-                pos: ray.at(t) + (self.normal * 0.00001),
-                t,
-            })
+            Some(t)
         } else {
             // This means that there is a line intersection but not a ray intersection.
             None
         }
-    }
-    fn get_color(&self) -> &Color {
-        &self.color
     }
 }
 
