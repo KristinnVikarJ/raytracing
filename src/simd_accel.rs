@@ -1,4 +1,4 @@
-use std::arch::x86_64::*;
+use std::{arch::x86_64::*, hint};
 
 use glam::Vec3;
 
@@ -17,10 +17,12 @@ pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles
     let mut v0_y = [0.0; 8];
     let mut v0_z = [0.0; 8];
 
-    let count = triangles.len().min(8);
+    if triangles.len() != 8 {
+        unsafe { hint::unreachable_unchecked() }
+    }
 
     // Load triangle vertices into arrays
-    for i in 0..count {
+    for i in 0..8 {
         let e1 = verts[triangles[i].b as usize];
         e1_x[i] = e1[0];
         e1_y[i] = e1[1];
@@ -77,14 +79,14 @@ pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles
         avx_multi_sub(&mut e1, a, v0);
         avx_multi_sub(&mut e2, b, v0);
 
-        let mask = if count != 8 {
+        /*let mask = if count != 8 {
             // Create the mask, setting the lower bits according to the number of triangles
             u8_mask_to_m256(((1u16 << count) - 1) as u8 ^ 0xFF)
         } else {
             _mm256_castsi256_ps(_mm256_set1_epi8(0)) // 1's represent masked out
-        };
+        };*/
 
-        PackedTriangles { e1, e2, v0, mask }
+        PackedTriangles { e1, e2, v0 }
     }
 }
 
@@ -241,7 +243,7 @@ impl PackedTriangles {
 
             failed = _mm256_or_ps(failed, _mm256_cmp_ps(t, ray_length, _CMP_GT_OQ));
 
-            failed = _mm256_or_ps(failed, self.mask);
+            //failed = _mm256_or_ps(failed, self.mask);
 
             let t_results = _mm256_blendv_ps(t, minus_one_m256(), failed);
 
@@ -284,13 +286,13 @@ mod tests {
 
         let packet = pack_triangles(&triangles, &verts);
 
-        unsafe {
+        // Check the mask
+        /*unsafe {
             assert_eq!(
                 _mm256_testz_ps(packet.mask, u8_mask_to_m256((1u8 << triangles.len()) - 1)),
                 0xFFFF
             );
-        }
-        // Check the mask
+        }*/
 
         // Check the packed coordinates
         for i in 0..triangles.len() {

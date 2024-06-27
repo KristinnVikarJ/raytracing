@@ -152,7 +152,6 @@ pub struct PackedTriangles {
     pub e1: [__m256; 3],
     pub e2: [__m256; 3],
     pub v0: [__m256; 3],
-    pub mask: __m256,
 }
 
 #[derive(Clone)]
@@ -220,7 +219,7 @@ impl Hittable for Triangle {
         // At this stage we can compute t to find out where the intersection point is on the line.
         let t = inv_det * e2.dot(s_cross_e1);
 
-        if t > f32::EPSILON && t > min {
+        if t > f32::EPSILON && t < min {
             // ray intersection
             Some(t)
         } else {
