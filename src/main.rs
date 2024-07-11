@@ -1,5 +1,6 @@
 mod objects;
 mod simd_accel;
+mod opt;
 
 use glam::Vec3;
 use itertools::Itertools;
@@ -7,6 +8,7 @@ use objects::{
     box_intersection_check, new_triangle, Color, Hittable, Material, Object, Ray, Triangle,
     TriangleData, World, BLACK,
 };
+use opt::optimize_model;
 use pixels::{Error, Pixels, SurfaceTexture};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use simd_accel::{extract_f32_from_m256, pack_triangles, ray_to_avx};
@@ -27,7 +29,7 @@ const HEIGHT: usize = 1000;
 
 const SCALE: f32 = 1.0;
 
-fn read_obj(
+pub fn read_obj(
     filename: &str,
     offset: Vec3,
     color: Color,
@@ -302,6 +304,11 @@ fn main() -> Result<(), Error> {
         ],
         Material::new(1.0, 0.0),
     ));
+
+    for obj in objects.iter_mut() {
+        optimize_model(obj);
+    }
+
     println!(
         "len: {}",
         objects.iter().map(|obj| obj.tris.len()).sum::<usize>()

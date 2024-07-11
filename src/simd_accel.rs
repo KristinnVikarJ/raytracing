@@ -40,38 +40,23 @@ pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles
     }
     unsafe {
         // Create __m256 vectors from the arrays
+        // TODO: Make sure the arrays are 32-byte aligned via struct
         let a = [
-            _mm256_set_ps(
-                e1_x[7], e1_x[6], e1_x[5], e1_x[4], e1_x[3], e1_x[2], e1_x[1], e1_x[0],
-            ),
-            _mm256_set_ps(
-                e1_y[7], e1_y[6], e1_y[5], e1_y[4], e1_y[3], e1_y[2], e1_y[1], e1_y[0],
-            ),
-            _mm256_set_ps(
-                e1_z[7], e1_z[6], e1_z[5], e1_z[4], e1_z[3], e1_z[2], e1_z[1], e1_z[0],
-            ),
+            _mm256_load_ps(e1_x.as_ptr()),
+            _mm256_load_ps(e1_y.as_ptr()),
+            _mm256_load_ps(e1_z.as_ptr()),
         ];
+
         let b = [
-            _mm256_set_ps(
-                e2_x[7], e2_x[6], e2_x[5], e2_x[4], e2_x[3], e2_x[2], e2_x[1], e2_x[0],
-            ),
-            _mm256_set_ps(
-                e2_y[7], e2_y[6], e2_y[5], e2_y[4], e2_y[3], e2_y[2], e2_y[1], e2_y[0],
-            ),
-            _mm256_set_ps(
-                e2_z[7], e2_z[6], e2_z[5], e2_z[4], e2_z[3], e2_z[2], e2_z[1], e2_z[0],
-            ),
+            _mm256_load_ps(e2_x.as_ptr()),
+            _mm256_load_ps(e2_y.as_ptr()),
+            _mm256_load_ps(e2_z.as_ptr()),
         ];
+
         let v0 = [
-            _mm256_set_ps(
-                v0_x[7], v0_x[6], v0_x[5], v0_x[4], v0_x[3], v0_x[2], v0_x[1], v0_x[0],
-            ),
-            _mm256_set_ps(
-                v0_y[7], v0_y[6], v0_y[5], v0_y[4], v0_y[3], v0_y[2], v0_y[1], v0_y[0],
-            ),
-            _mm256_set_ps(
-                v0_z[7], v0_z[6], v0_z[5], v0_z[4], v0_z[3], v0_z[2], v0_z[1], v0_z[0],
-            ),
+            _mm256_load_ps(v0_x.as_ptr()),
+            _mm256_load_ps(v0_y.as_ptr()),
+            _mm256_load_ps(v0_z.as_ptr()),
         ];
 
         let mut e1 = [_mm256_undefined_ps(); 3];
@@ -79,44 +64,7 @@ pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles
         avx_multi_sub(&mut e1, a, v0);
         avx_multi_sub(&mut e2, b, v0);
 
-        /*let mask = if count != 8 {
-            // Create the mask, setting the lower bits according to the number of triangles
-            u8_mask_to_m256(((1u16 << count) - 1) as u8 ^ 0xFF)
-        } else {
-            _mm256_castsi256_ps(_mm256_set1_epi8(0)) // 1's represent masked out
-        };*/
-
         PackedTriangles { e1, e2, v0 }
-    }
-}
-
-#[repr(C)]
-union C {
-    a: __m256i,
-    c: [i8; 32],
-}
-
-const BITMASK: __m256i = unsafe {
-    C {
-        c: [
-            1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 8, 8, 8, 8, 16, 16, 16, 16, 32, 32, 32, 32, 64, 64,
-            64, 64, -128, -128, -128, -128,
-        ],
-    }
-    .a
-};
-
-#[inline(always)]
-fn u8_mask_to_m256(value: u8) -> __m256 {
-    unsafe {
-        // Create a __m256i register with the value repeated across all elements
-        let broadcast_value = _mm256_set1_epi8(value as i8);
-
-        // Use a comparison to generate the mask
-        let mask_i = _mm256_cmpeq_epi8(_mm256_and_si256(broadcast_value, BITMASK), BITMASK);
-
-        // Cast the __m256i register to a __m256 register
-        _mm256_castsi256_ps(mask_i)
     }
 }
 
@@ -132,12 +80,12 @@ fn minus_one_m256() -> __m256 {
 
 #[inline(always)]
 fn positive_epsilon_m256() -> __m256 {
-    unsafe { _mm256_set1_ps(1e-6) }
+    unsafe { _mm256_set1_ps(f32::EPSILON) }
 }
 
 #[inline(always)]
 fn negative_epsilon_m256() -> __m256 {
-    unsafe { _mm256_set1_ps(-1e-6) }
+    unsafe { _mm256_set1_ps(-f32::EPSILON) }
 }
 
 #[inline(always)]
