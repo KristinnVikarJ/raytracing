@@ -66,6 +66,23 @@ pub struct Color {
     pub b: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ScreenColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8
+}
+
+impl ScreenColor {
+    pub fn from(other: Color) -> Self {
+        Self {
+            r: (other.r * 255.0).min(255.0) as u8,
+            g: (other.g * 255.0).min(255.0) as u8,
+            b: (other.b * 255.0).min(255.0) as u8
+        }
+    }
+}
+
 impl Color {
     pub fn new(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b }
@@ -102,6 +119,12 @@ pub const BLACK: Color = Color {
     r: 0.0,
     g: 0.0,
     b: 0.0,
+};
+
+pub const SCREEN_BLACK: ScreenColor = ScreenColor {
+    r: 0,
+    g: 0,
+    b: 0
 };
 
 #[derive(Clone)]

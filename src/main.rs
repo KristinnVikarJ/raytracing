@@ -5,8 +5,7 @@ mod opt;
 use glam::Vec3;
 use itertools::Itertools;
 use objects::{
-    box_intersection_check, new_triangle, Color, Hittable, Material, Object, Ray, Triangle,
-    TriangleData, World, BLACK,
+    box_intersection_check, new_triangle, Color, Hittable, Material, Object, Ray, ScreenColor, Triangle, TriangleData, World, BLACK, SCREEN_BLACK
 };
 use opt::optimize_model;
 use pixels::{Error, Pixels, SurfaceTexture};
@@ -210,7 +209,7 @@ fn draw(frame: &mut [u8], world: &World, t: f32) {
     let rows = (0..HEIGHT)
         .into_par_iter()
         .map(|y| {
-            let mut row = [BLACK; WIDTH];
+            let mut row = [SCREEN_BLACK; WIDTH];
             for x in 0..WIDTH {
                 let xx =
                     (2.0 * (x as f32 + 0.5) / (WIDTH as f32) - 1.0) * aspect_ratio as f32 * SCALE;
@@ -221,17 +220,17 @@ fn draw(frame: &mut [u8], world: &World, t: f32) {
                     dir: Vec3::new(xx, yy, 1.0),
                     inv_dir: Vec3::new(xx, yy, 1.0).recip(),
                 };
-                row[x] = trace_ray(&ray, world, 1);
+                row[x] = ScreenColor::from(trace_ray(&ray, world, 1));
             }
             row
         })
-        .collect::<Vec<[Color; WIDTH]>>();
+        .collect::<Vec<[ScreenColor; WIDTH]>>();
 
     for (y, row) in rows.iter().enumerate() {
         for (x, color) in row.iter().enumerate() {
-            frame[y * 4 * WIDTH + (x * 4)] = (color.r * 255.0).min(255.0) as u8;
-            frame[y * 4 * WIDTH + (x * 4) + 1] = (color.g * 255.0).min(255.0) as u8;
-            frame[y * 4 * WIDTH + (x * 4) + 2] = (color.b * 255.0).min(255.0) as u8;
+            frame[y * 4 * WIDTH + (x * 4)] = color.r;
+            frame[y * 4 * WIDTH + (x * 4) + 1] = color.g;
+            frame[y * 4 * WIDTH + (x * 4) + 2] = color.b;
             frame[y * 4 * WIDTH + (x * 4) + 3] = 0xff;
         }
     }
