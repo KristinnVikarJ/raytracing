@@ -11,7 +11,7 @@ pub trait Hittable {
 }
 
 pub struct World {
-    pub objects: Vec<Object>,
+    pub objects: Vec<PackedObject>,
     pub sun: Vec3,
 }
 
@@ -22,6 +22,12 @@ pub struct Object {
     pub verts: Vec<Vec3>,
     pub bounding_box: BoxShape,
     pub material: Material,
+}
+
+pub struct PackedObject {
+    pub obj: Object,
+    pub packed_tris: Vec<PackedTriangles>,
+    pub rest: Vec<Triangle>
 }
 
 impl Object {

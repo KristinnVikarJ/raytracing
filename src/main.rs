@@ -5,9 +5,9 @@ mod opt;
 use glam::Vec3;
 use itertools::Itertools;
 use objects::{
-    box_intersection_check, new_triangle, Color, Hittable, Material, Object, Ray, ScreenColor, Triangle, TriangleData, World, BLACK, SCREEN_BLACK
+    box_intersection_check, new_triangle, Color, Hittable, Material, Object, PackedObject, Ray, ScreenColor, Triangle, TriangleData, World, BLACK, SCREEN_BLACK
 };
-use opt::optimize_model;
+use opt::{optimize_model, pack_model};
 use pixels::{Error, Pixels, SurfaceTexture};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use simd_accel::{extract_f32_from_m256, pack_triangles, ray_to_avx};
@@ -23,8 +23,8 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: usize = 1000;
-const HEIGHT: usize = 1000;
+const WIDTH: usize = 100;
+const HEIGHT: usize = 100;
 
 const SCALE: f32 = 1.0;
 
@@ -74,53 +74,42 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
 
     let mut color = BLACK;
 
-    let mut triangle_tmp = Vec::with_capacity(8);
-    let mut c = 0;
     let (ray_origin, ray_direction) = ray_to_avx(&ray);
 
     for obj in world.objects.iter() {
-        if box_intersection_check(ray, &obj.bounding_box) {
-            for (idx, tri) in obj.tris.iter().enumerate() {
-                triangle_tmp.push(tri.clone());
-                c += 1;
-                if c == 8 {
-                    let packed = pack_triangles(&triangle_tmp, &obj.verts);
-                    let (t_values, hit_mask) =
-                        packed.intersect(ray_origin, ray_direction, closest_splat);
-                    if hit_mask != 0xFF {
-                        let t_arr = extract_f32_from_m256(t_values);
-                        // At least 1 hit!
-                        for i in 0..8 {
-                            if t_arr[i] > 0.0 && closest > t_arr[i] {
-                                closest = t_arr[i];
-                                hit_tri = Some(obj.tri_data[idx - 7 + i].clone());
-                                hit_obj = Some(obj);
-                                hit_position = Some(
-                                    ray.at(t_arr[i]) + (obj.tri_data[idx - 7 + i].normal * 0.00001),
-                                );
-                            }
-                        }
-                    }
-                    closest_splat = unsafe { _mm256_set1_ps(closest) };
-                    triangle_tmp.clear();
-                    c = 0;
-                }
-            }
-
-            if c > 0 {
-                for (i, tri) in triangle_tmp.iter().enumerate() {
-                    if let Some(t) = tri.ray_hits(&ray, closest, &obj.verts) {
-                        if closest > t {
-                            hit_tri = Some(obj.tri_data[obj.tris.len() - c + i].clone());
+        if box_intersection_check(ray, &obj.obj.bounding_box) {
+            for (idx, packed) in obj.packed_tris.iter().enumerate() {
+                let (t_values, hit_mask) =
+                    packed.intersect(ray_origin, ray_direction, closest_splat);
+                if hit_mask != 0xFF {
+                    let t_arr = extract_f32_from_m256(t_values);
+                    // At least 1 hit!
+                    for i in 0..8 {
+                        if t_arr[i] > 0.0 && closest > t_arr[i] {
+                            closest = t_arr[i];
+                            hit_tri = Some(obj.obj.tri_data[(idx*8) + i].clone());
                             hit_obj = Some(obj);
                             hit_position = Some(
-                                ray.at(t) + (obj.tri_data[obj.tris.len() - c + i].normal * 0.00001),
+                                ray.at(t_arr[i]) + (obj.obj.tri_data[(idx*8) + i].normal * 0.00001),
                             );
                         }
                     }
                 }
-                triangle_tmp.clear();
-                c = 0;
+                closest_splat = unsafe { _mm256_set1_ps(closest) };
+            }
+
+            let c = obj.rest.len();
+
+            for (idx, tri) in obj.rest.iter().enumerate() {
+                if let Some(t) = tri.ray_hits(&ray, closest, &obj.obj.verts) {
+                    if closest > t {
+                        hit_tri = Some(obj.obj.tri_data[obj.obj.tris.len() - c + idx].clone());
+                        hit_obj = Some(obj);
+                        hit_position = Some(
+                            ray.at(t) + (obj.obj.tri_data[obj.obj.tris.len() - c + idx].normal * 0.00001),
+                        );
+                    }
+                }
             }
         }
     }
@@ -140,30 +129,21 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
         // We do a little cheating
         if hit_data.normal.dot(sun_dir) > 0.0 {
             for obj in world.objects.iter() {
-                if box_intersection_check(ray, &obj.bounding_box) {
-                    for tri in obj.tris.iter() {
-                        triangle_tmp.push(tri.clone());
-                        c += 1;
-                        if c == 8 {
-                            let packed = pack_triangles(&triangle_tmp, &obj.verts);
-                            let (_, hit_mask) =
-                                packed.intersect(ray_origin, ray_direction, closest_splat);
-                            if hit_mask != 0xFF {
-                                can_see_sun = false;
-                                break;
-                            }
-                            triangle_tmp.clear();
-                            c = 0;
+                if box_intersection_check(ray, &obj.obj.bounding_box) {
+                    for (_, packed) in obj.packed_tris.iter().enumerate() {
+                        let (_, hit_mask) =
+                            packed.intersect(ray_origin, ray_direction, closest_splat);
+                        if hit_mask != 0xFF {
+                            can_see_sun = false;
+                            break;
                         }
                     }
-                    if c > 0 {
-                        for tri in triangle_tmp.iter() {
-                            if tri.ray_hits(&sun_ray, f32::INFINITY, &obj.verts).is_some() {
-                                can_see_sun = false;
-                                break;
-                            }
+                
+                    for (i_dx, tri) in obj.rest.iter().enumerate() {
+                        if let Some(_) = tri.ray_hits(&ray, closest, &obj.obj.verts) {
+                            can_see_sun = false;
+                            break;
                         }
-                        triangle_tmp.clear()
                     }
                     if !can_see_sun {
                         break;
@@ -174,14 +154,14 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                 let light_power = hit_data.normal.dot(sun_dir); // Assuming light intensity 1
                 color = hit_data
                     .color
-                    .mul(light_power * inside_obj.material.albedo * 2.2)
+                    .mul(light_power * inside_obj.obj.material.albedo * 2.2)
                 // 2.2 is gamma
             }
         }
 
-        if depth < 5 {
+        if depth < 4 {
             let reflection_dir = ray.dir - 2.0 * hit_data.normal * (ray.dir.dot(hit_data.normal));
-            color = color.mul(1.0 - inside_obj.material.reflectivity);
+            color = color.mul(1.0 - inside_obj.obj.material.reflectivity);
             color = color.add(
                 trace_ray(
                     &Ray {
@@ -192,7 +172,7 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                     world,
                     depth + 1,
                 )
-                .mul(inside_obj.material.reflectivity),
+                .mul(inside_obj.obj.material.reflectivity),
             );
         }
     } else {
@@ -237,6 +217,7 @@ fn draw(frame: &mut [u8], world: &World, t: f32) {
 }
 
 fn main() -> Result<(), Error> {
+    // TODO: Use clap for CLI params
     let event_loop = EventLoop::new().unwrap();
     let mut input = WinitInputHelper::new();
     let window = {
@@ -308,9 +289,11 @@ fn main() -> Result<(), Error> {
         optimize_model(obj);
     }
 
+    let objects: Vec<PackedObject> = objects.into_iter().map(|obj| pack_model(obj)).collect();
+
     println!(
         "len: {}",
-        objects.iter().map(|obj| obj.tris.len()).sum::<usize>()
+        objects.iter().map(|obj| obj.obj.tris.len()).sum::<usize>()
     );
     let mut world = World {
         objects,

@@ -40,31 +40,30 @@ pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles
     }
     unsafe {
         // Create __m256 vectors from the arrays
-        // TODO: Make sure the arrays are 32-byte aligned via struct
-        let a = [
-            _mm256_load_ps(e1_x.as_ptr()),
-            _mm256_load_ps(e1_y.as_ptr()),
-            _mm256_load_ps(e1_z.as_ptr()),
+        let mut a = [
+            _mm256_loadu_ps(e1_x.as_ptr()),
+            _mm256_loadu_ps(e1_y.as_ptr()),
+            _mm256_loadu_ps(e1_z.as_ptr()),
         ];
 
-        let b = [
-            _mm256_load_ps(e2_x.as_ptr()),
-            _mm256_load_ps(e2_y.as_ptr()),
-            _mm256_load_ps(e2_z.as_ptr()),
+        let mut b = [
+            _mm256_loadu_ps(e2_x.as_ptr()),
+            _mm256_loadu_ps(e2_y.as_ptr()),
+            _mm256_loadu_ps(e2_z.as_ptr()),
         ];
 
         let v0 = [
-            _mm256_load_ps(v0_x.as_ptr()),
-            _mm256_load_ps(v0_y.as_ptr()),
-            _mm256_load_ps(v0_z.as_ptr()),
+            _mm256_loadu_ps(v0_x.as_ptr()),
+            _mm256_loadu_ps(v0_y.as_ptr()),
+            _mm256_loadu_ps(v0_z.as_ptr()),
         ];
 
-        let mut e1 = [_mm256_undefined_ps(); 3];
-        let mut e2 = [_mm256_undefined_ps(); 3];
-        avx_multi_sub(&mut e1, a, v0);
-        avx_multi_sub(&mut e2, b, v0);
+        //let mut e1 = [_mm256_undefined_ps(); 3];
+        //let mut e2 = [_mm256_undefined_ps(); 3];
+        inplace_avx_multi_sub(&mut a, v0);
+        inplace_avx_multi_sub(&mut b, v0);
 
-        PackedTriangles { e1, e2, v0 }
+        PackedTriangles { e1: a, e2: b, v0 }
     }
 }
 
@@ -119,6 +118,15 @@ fn avx_multi_sub(result: &mut [__m256; 3], a: [__m256; 3], b: [__m256; 3]) {
         result[0] = _mm256_sub_ps(a[0], b[0]);
         result[1] = _mm256_sub_ps(a[1], b[1]);
         result[2] = _mm256_sub_ps(a[2], b[2]);
+    }
+}
+
+#[inline(always)]
+fn inplace_avx_multi_sub(a: &mut [__m256; 3], b: [__m256; 3]) {
+    unsafe {
+        a[0] = _mm256_sub_ps(a[0], b[0]);
+        a[1] = _mm256_sub_ps(a[1], b[1]);
+        a[2] = _mm256_sub_ps(a[2], b[2]);
     }
 }
 

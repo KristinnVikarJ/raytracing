@@ -1,4 +1,4 @@
-use crate::{Object, Triangle};
+use crate::{objects::PackedObject, simd_accel::pack_triangles, Object, Triangle};
 
 pub fn optimize_model(obj: &mut Object) {
     let mut combined: Vec<(usize, Triangle)> = obj.tris.iter().cloned().enumerate().collect();
@@ -25,6 +25,18 @@ pub fn optimize_model(obj: &mut Object) {
 
     obj.tris = tris;
     obj.tri_data = tridata;
+}
+
+pub fn pack_model(obj: Object) -> PackedObject {
+    let mut packed_tris = Vec::new();
+    for k in 0..obj.tris.len() / 8 {
+        let packed = pack_triangles(&obj.tris[k*8..(k+1)*8], &obj.verts);
+        packed_tris.push(packed);
+    }
+
+    let mut rest = Vec::new();
+    rest.extend_from_slice(&obj.tris[(obj.tris.len() / 8) * 8..obj.tris.len()]);
+    PackedObject { obj, packed_tris, rest }
 }
 
 
