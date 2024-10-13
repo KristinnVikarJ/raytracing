@@ -58,8 +58,6 @@ pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles
             _mm256_loadu_ps(v0_z.as_ptr()),
         ];
 
-        //let mut e1 = [_mm256_undefined_ps(); 3];
-        //let mut e2 = [_mm256_undefined_ps(); 3];
         inplace_avx_multi_sub(&mut a, v0);
         inplace_avx_multi_sub(&mut b, v0);
 

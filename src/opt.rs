@@ -1,4 +1,8 @@
-use crate::{objects::PackedObject, simd_accel::pack_triangles, Object, Triangle};
+use crate::{
+    objects::{Color, PackedObject},
+    simd_accel::pack_triangles,
+    Object, Triangle,
+};
 
 pub fn optimize_model(obj: &mut Object) {
     let mut combined: Vec<(usize, Triangle)> = obj.tris.iter().cloned().enumerate().collect();
@@ -14,7 +18,7 @@ pub fn optimize_model(obj: &mut Object) {
             amin.cmp(&bmin)
         }
     });
-    
+
     let mut tris = Vec::new();
     let mut tridata = Vec::new();
 
@@ -28,29 +32,42 @@ pub fn optimize_model(obj: &mut Object) {
 }
 
 pub fn pack_model(obj: Object) -> PackedObject {
+    let mut obj = obj;
     let mut packed_tris = Vec::new();
+    let mx = (obj.tris.len() / 8) as f32;
     for k in 0..obj.tris.len() / 8 {
-        let packed = pack_triangles(&obj.tris[k*8..(k+1)*8], &obj.verts);
+        let color = Color::new(k as f32 / mx, k as f32 / mx, k as f32 / mx);
+        let packed = pack_triangles(&obj.tris[k * 8..(k + 1) * 8], &obj.verts);
+        for i in k * 8..(k + 1) * 8 {
+            obj.tri_data[i].color = color.clone();
+        }
         packed_tris.push(packed);
     }
 
     let mut rest = Vec::new();
     rest.extend_from_slice(&obj.tris[(obj.tris.len() / 8) * 8..obj.tris.len()]);
-    PackedObject { obj, packed_tris, rest }
+    PackedObject {
+        obj,
+        packed_tris,
+        rest,
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
     use glam::Vec3;
 
-    use crate::{objects::{Material, BLACK}, read_obj};
+    use crate::{
+        objects::{Material, BLACK},
+        read_obj,
+    };
 
     use super::*;
 
     #[test]
     fn validate() {
-        let (teapot_tris, teapot_tri_data, teapot_verts) = read_obj("teapot.obj", Vec3::splat(0.0), BLACK);
+        let (teapot_tris, teapot_tri_data, teapot_verts) =
+            read_obj("teapot.obj", Vec3::splat(0.0), BLACK);
 
         let mut obj = Object::from(
             teapot_tris,

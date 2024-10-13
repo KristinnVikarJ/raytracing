@@ -1,16 +1,17 @@
 mod objects;
-mod simd_accel;
 mod opt;
+mod simd_accel;
 
 use glam::Vec3;
 use itertools::Itertools;
 use objects::{
-    box_intersection_check, new_triangle, Color, Hittable, Material, Object, PackedObject, Ray, ScreenColor, Triangle, TriangleData, World, BLACK, SCREEN_BLACK
+    box_intersection_check, new_triangle, Color, Hittable, Material, Object, PackedObject, Ray,
+    ScreenColor, Triangle, TriangleData, World, BLACK, SCREEN_BLACK,
 };
 use opt::{optimize_model, pack_model};
 use pixels::{Error, Pixels, SurfaceTexture};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use simd_accel::{extract_f32_from_m256, pack_triangles, ray_to_avx};
+use simd_accel::{extract_f32_from_m256, ray_to_avx};
 use std::arch::x86_64::_mm256_set1_ps;
 use std::fs::read_to_string;
 use std::{process, time::Instant};
@@ -23,8 +24,8 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: usize = 100;
-const HEIGHT: usize = 100;
+const WIDTH: usize = 800;
+const HEIGHT: usize = 800;
 
 const SCALE: f32 = 1.0;
 
@@ -87,10 +88,11 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                     for i in 0..8 {
                         if t_arr[i] > 0.0 && closest > t_arr[i] {
                             closest = t_arr[i];
-                            hit_tri = Some(obj.obj.tri_data[(idx*8) + i].clone());
+                            hit_tri = Some(obj.obj.tri_data[(idx * 8) + i].clone());
                             hit_obj = Some(obj);
                             hit_position = Some(
-                                ray.at(t_arr[i]) + (obj.obj.tri_data[(idx*8) + i].normal * 0.00001),
+                                ray.at(t_arr[i])
+                                    + (obj.obj.tri_data[(idx * 8) + i].normal * 0.00001),
                             );
                         }
                     }
@@ -106,7 +108,8 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                         hit_tri = Some(obj.obj.tri_data[obj.obj.tris.len() - c + idx].clone());
                         hit_obj = Some(obj);
                         hit_position = Some(
-                            ray.at(t) + (obj.obj.tri_data[obj.obj.tris.len() - c + idx].normal * 0.00001),
+                            ray.at(t)
+                                + (obj.obj.tri_data[obj.obj.tris.len() - c + idx].normal * 0.00001),
                         );
                     }
                 }
@@ -124,6 +127,7 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
             dir: sun_dir,
             inv_dir: sun_dir.recip(),
         };
+        //let closest_splat = unsafe { _mm256_set1_ps(f32::INFINITY) };
         let (ray_origin, ray_direction) = ray_to_avx(&sun_ray);
 
         // We do a little cheating
@@ -138,12 +142,11 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                             break;
                         }
                     }
-                
-                    for (i_dx, tri) in obj.rest.iter().enumerate() {
-                        if let Some(_) = tri.ray_hits(&ray, closest, &obj.obj.verts) {
-                            can_see_sun = false;
-                            break;
-                        }
+                    if can_see_sun {
+                        can_see_sun = !obj
+                            .rest
+                            .iter()
+                            .any(|tri| tri.ray_hits(ray, closest, &obj.obj.verts).is_some());
                     }
                     if !can_see_sun {
                         break;
@@ -159,7 +162,7 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
             }
         }
 
-        if depth < 4 {
+        if depth < 4 && inside_obj.obj.material.reflectivity > 0.0 {
             let reflection_dir = ray.dir - 2.0 * hit_data.normal * (ray.dir.dot(hit_data.normal));
             color = color.mul(1.0 - inside_obj.obj.material.reflectivity);
             color = color.add(
@@ -182,7 +185,7 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
     color
 }
 
-fn draw(frame: &mut [u8], world: &World, t: f32) {
+fn draw(frame: &mut [u8], world: &World, _t: f32) {
     let aspect_ratio = WIDTH / HEIGHT;
     let origin = Vec3::new(0.0, 0.0, 0.0);
 

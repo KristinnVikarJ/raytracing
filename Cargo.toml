@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
-lto = "thin"
+#lto = "thin"
 #strip = true
 debug = true
 panic = "abort"
