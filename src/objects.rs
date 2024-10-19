@@ -27,6 +27,7 @@ pub struct Object {
 pub struct PackedObject {
     pub obj: Object,
     pub packed_tris: Vec<PackedTriangles>,
+    pub tri_bounds: Vec<BoxShape>,
     pub rest: Vec<Triangle>,
 }
 
@@ -177,6 +178,12 @@ pub struct PackedTriangles {
     pub e1: [__m256; 3],
     pub e2: [__m256; 3],
     pub v0: [__m256; 3],
+}
+
+pub struct PackedBoxes {
+    pub x: [__m256; 2],
+    pub y: [__m256; 2],
+    pub z: [__m256; 2],
 }
 
 #[derive(Clone)]

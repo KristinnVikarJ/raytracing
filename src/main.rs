@@ -24,8 +24,8 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: usize = 800;
-const HEIGHT: usize = 800;
+const WIDTH: usize = 600;
+const HEIGHT: usize = 600;
 
 const SCALE: f32 = 1.0;
 

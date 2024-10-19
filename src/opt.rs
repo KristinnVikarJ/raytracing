@@ -1,5 +1,5 @@
 use crate::{
-    objects::{Color, PackedObject},
+    objects::{BoxShape, Color, PackedObject},
     simd_accel::pack_triangles,
     Object, Triangle,
 };
@@ -34,13 +34,30 @@ pub fn optimize_model(obj: &mut Object) {
 pub fn pack_model(obj: Object) -> PackedObject {
     let mut obj = obj;
     let mut packed_tris = Vec::new();
+    let mut tri_bounds = Vec::new();
     let mx = (obj.tris.len() / 8) as f32;
+
     for k in 0..obj.tris.len() / 8 {
         let color = Color::new(k as f32 / mx, k as f32 / mx, k as f32 / mx);
         let packed = pack_triangles(&obj.tris[k * 8..(k + 1) * 8], &obj.verts);
         for i in k * 8..(k + 1) * 8 {
             obj.tri_data[i].color = color.clone();
         }
+
+        let mut min = obj.verts[0];
+        let mut max = obj.verts[0];
+        for tri in obj.tris[k * 8..(k + 1) * 8].iter() {
+            let tri_max = obj.verts[tri.a as usize]
+                .max(obj.verts[tri.b as usize])
+                .max(obj.verts[tri.c as usize]);
+            let tri_min = obj.verts[tri.a as usize]
+                .min(obj.verts[tri.b as usize])
+                .min(obj.verts[tri.c as usize]);
+            max = max.max(tri_max);
+            min = min.min(tri_min);
+        }
+
+        tri_bounds.push(BoxShape { min, max });
         packed_tris.push(packed);
     }
 
@@ -49,6 +66,7 @@ pub fn pack_model(obj: Object) -> PackedObject {
     PackedObject {
         obj,
         packed_tris,
+        tri_bounds,
         rest,
     }
 }
