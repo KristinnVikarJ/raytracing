@@ -27,8 +27,10 @@ pub struct Object {
 pub struct PackedObject {
     pub obj: Object,
     pub packed_tris: Vec<PackedTriangles>,
+    pub packed_tri_bounds: Vec<PackedBoxes>,
     pub tri_bounds: Vec<BoxShape>,
-    pub rest: Vec<Triangle>,
+    pub rest_tri: Vec<Triangle>,
+    pub rest_bounds: Vec<BoxShape>,
 }
 
 impl Object {
@@ -180,10 +182,10 @@ pub struct PackedTriangles {
     pub v0: [__m256; 3],
 }
 
+#[derive(Debug)]
 pub struct PackedBoxes {
-    pub x: [__m256; 2],
-    pub y: [__m256; 2],
-    pub z: [__m256; 2],
+    pub min: [__m256; 3],
+    pub max: [__m256; 3],
 }
 
 #[derive(Clone)]

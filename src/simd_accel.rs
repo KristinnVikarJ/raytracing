@@ -2,7 +2,7 @@ use std::{arch::x86_64::*, hint};
 
 use glam::Vec3;
 
-use crate::objects::{PackedTriangles, Ray, Triangle};
+use crate::objects::{BoxShape, PackedBoxes, PackedTriangles, Ray, Triangle};
 
 #[inline(always)]
 pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles {
@@ -62,6 +62,48 @@ pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles
         inplace_avx_multi_sub(&mut b, v0);
 
         PackedTriangles { e1: a, e2: b, v0 }
+    }
+}
+
+#[inline(always)]
+pub fn pack_boxes(boxes: &[BoxShape]) -> PackedBoxes {
+    // Initialize arrays to hold 8 values for each coordinate component
+    let mut min_x = [0.0; 8];
+    let mut min_y = [0.0; 8];
+    let mut min_z = [0.0; 8];
+    let mut max_x = [0.0; 8];
+    let mut max_y = [0.0; 8];
+    let mut max_z = [0.0; 8];
+
+    if boxes.len() != 8 {
+        unsafe { hint::unreachable_unchecked() }
+    }
+
+    for i in 0..8 {
+        let min = boxes[i].min;
+        min_x[i] = min[0];
+        min_y[i] = min[1];
+        min_z[i] = min[2];
+
+        let max = boxes[i].max;
+        max_x[i] = max[0];
+        max_y[i] = max[1];
+        max_z[i] = max[2];
+    }
+    unsafe {
+        // Create __m256 vectors from the arrays
+        let min = [
+            _mm256_loadu_ps(min_x.as_ptr()),
+            _mm256_loadu_ps(min_y.as_ptr()),
+            _mm256_loadu_ps(min_z.as_ptr()),
+        ];
+
+        let max = [
+            _mm256_loadu_ps(min_x.as_ptr()),
+            _mm256_loadu_ps(min_y.as_ptr()),
+            _mm256_loadu_ps(min_z.as_ptr()),
+        ];
+        PackedBoxes { min, max }
     }
 }
 
@@ -128,6 +170,45 @@ fn inplace_avx_multi_sub(a: &mut [__m256; 3], b: [__m256; 3]) {
     }
 }
 
+#[inline(always)]
+fn avx_multi_min(result: &mut [__m256; 3], a: [__m256; 3], b: [__m256; 3]) {
+    unsafe {
+        result[0] = _mm256_min_ps(a[0], b[0]);
+        result[1] = _mm256_min_ps(a[1], b[1]);
+        result[2] = _mm256_min_ps(a[2], b[2]);
+    }
+}
+
+#[inline(always)]
+fn inplace_avx_multi_max(a: &mut [__m256; 3], b: [__m256; 3]) {
+    unsafe {
+        a[0] = _mm256_max_ps(a[0], b[0]);
+        a[1] = _mm256_max_ps(a[1], b[1]);
+        a[2] = _mm256_max_ps(a[2], b[2]);
+    }
+}
+
+/// AVX Component-wise multiplication
+#[inline(always)]
+#[allow(unused)]
+fn avx_multi_mul(result: &mut [__m256; 3], a: [__m256; 3], b: [__m256; 3]) {
+    unsafe {
+        result[0] = _mm256_mul_ps(a[0], b[0]);
+        result[1] = _mm256_mul_ps(a[1], b[1]);
+        result[2] = _mm256_mul_ps(a[2], b[2]);
+    }
+}
+
+/// AVX in-place component-wise multiplication
+#[inline(always)]
+fn inplace_avx_multi_mul(a: &mut [__m256; 3], b: [__m256; 3]) {
+    unsafe {
+        a[0] = _mm256_mul_ps(a[0], b[0]);
+        a[1] = _mm256_mul_ps(a[1], b[1]);
+        a[2] = _mm256_mul_ps(a[2], b[2]);
+    }
+}
+
 pub fn extract_f32_from_m256(m: __m256) -> [f32; 8] {
     let mut result: [f32; 8] = [0.0; 8];
     unsafe {
@@ -136,7 +217,13 @@ pub fn extract_f32_from_m256(m: __m256) -> [f32; 8] {
     result
 }
 
-pub fn ray_to_avx(ray: &Ray) -> ([__m256; 3], [__m256; 3]) {
+pub struct SimdRay {
+    pub origin:  [__m256; 3],
+    pub dir: [__m256; 3],
+    pub inv_dir: [__m256; 3]
+}
+
+pub fn ray_to_avx(ray: &Ray) -> SimdRay {
     unsafe {
         let origin_x = _mm256_set1_ps(ray.origin.x);
         let origin_y = _mm256_set1_ps(ray.origin.y);
@@ -146,37 +233,41 @@ pub fn ray_to_avx(ray: &Ray) -> ([__m256; 3], [__m256; 3]) {
         let direction_y = _mm256_set1_ps(ray.dir.y);
         let direction_z = _mm256_set1_ps(ray.dir.z);
 
-        (
-            [origin_x, origin_y, origin_z],
-            [direction_x, direction_y, direction_z],
-        )
+        let inv_dir_x = _mm256_set1_ps(ray.inv_dir.x);
+        let inv_dir_y = _mm256_set1_ps(ray.inv_dir.y);
+        let inv_dir_z = _mm256_set1_ps(ray.inv_dir.z);
+
+        SimdRay {
+            origin: [origin_x, origin_y, origin_z],
+            dir: [direction_x, direction_y, direction_z],
+            inv_dir: [inv_dir_x, inv_dir_y, inv_dir_z],
+        }
     }
 }
 
 impl PackedTriangles {
     pub fn intersect(
         &self,
-        ray_origin: [__m256; 3],
-        ray_direction: [__m256; 3],
+        simd_ray: &SimdRay,
         ray_length: __m256,
     ) -> (__m256, i32) {
         unsafe {
             let mut q = [_mm256_undefined_ps(); 3];
-            avx_multi_cross(&mut q, ray_direction, self.e2);
+            avx_multi_cross(&mut q, simd_ray.dir, self.e2);
 
             let a = avx_multi_dot(self.e1, q);
 
             let f = _mm256_div_ps(one_m256(), a);
 
             let mut s = [_mm256_undefined_ps(); 3];
-            avx_multi_sub(&mut s, ray_origin, self.v0);
+            avx_multi_sub(&mut s, simd_ray.origin, self.v0);
 
             let u = _mm256_mul_ps(f, avx_multi_dot(s, q));
 
             let mut r = [_mm256_undefined_ps(); 3];
             avx_multi_cross(&mut r, s, self.e1);
 
-            let v = _mm256_mul_ps(f, avx_multi_dot(ray_direction, r));
+            let v = _mm256_mul_ps(f, avx_multi_dot(simd_ray.dir, r));
 
             let t = _mm256_mul_ps(f, avx_multi_dot(self.e2, r));
 
@@ -201,6 +292,71 @@ impl PackedTriangles {
 
             let t_results = _mm256_blendv_ps(t, minus_one_m256(), failed);
 
+            (t_results, _mm256_movemask_ps(t_results))
+        }
+    }
+}
+
+/*
+pub fn box_intersection_check(ray: &Ray, check_box: &BoxShape) -> bool {
+    let t1 = (check_box.min - ray.origin) * ray.inv_dir;
+    let t2 = (check_box.max - ray.origin) * ray.inv_dir;
+
+    let tmin = t1.min(t2);
+    let tmax = t1.max(t2);
+
+    let t_near = tmin.x.max(tmin.y).max(tmin.z);
+    let t_far = tmax.x.min(tmax.y).min(tmax.z);
+
+    t_near.min(0.0) <= t_far
+}
+*/
+
+impl PackedBoxes {
+    pub fn intersect(
+        &self,
+        simd_ray: &SimdRay,
+        ray_length: __m256,
+    ) -> (__m256, i32) {
+        unsafe {
+            // let t1 = (check_box.min - ray.origin) * ray.inv_dir;
+            let mut t1 = [_mm256_undefined_ps(); 3];
+            avx_multi_sub(&mut t1, self.min, simd_ray.origin);
+            inplace_avx_multi_mul(&mut t1, simd_ray.inv_dir);
+
+
+            // let t2 = (check_box.max - ray.origin) * ray.inv_dir;
+            let mut t2 = [_mm256_undefined_ps(); 3];
+            avx_multi_sub(&mut t2, self.max, simd_ray.origin);
+            inplace_avx_multi_mul(&mut t2, simd_ray.inv_dir);
+
+
+            // TODO: check if implementation is correct
+            // refer to https://tavianator.com/2022/ray_box_boundary.html
+
+            // let tmin = t1.min(t2);
+            let mut tmin = [_mm256_undefined_ps(); 3];
+            avx_multi_min(&mut tmin, t1, t2);
+
+            // inplace max, since this is the last time we use t1 & t2
+            // let tmax = t1.max(t2);
+            inplace_avx_multi_max(&mut t1, t2);
+            let tmax = t1;
+
+
+            // let t_near = tmin.x.max(tmin.y).max(tmin.z);
+            let t_near = _mm256_max_ps(tmin[0], _mm256_max_ps(tmin[1], tmin[2]));
+            let t_far = _mm256_min_ps(tmax[0], _mm256_min_ps(tmax[1], tmax[2]));
+
+
+            // t_near.min(0.0) <= t_far
+            let t_near = _mm256_min_ps(t_near, zero_m256());
+            let mask = _mm256_cmp_ps(t_near, t_far, _CMP_LE_OQ);
+
+            // blend mask
+            let t_results = _mm256_blendv_ps(minus_one_m256(), one_m256(), mask);
+            //println!("{:x?}", t_results);
+            
             (t_results, _mm256_movemask_ps(t_results))
         }
     }
