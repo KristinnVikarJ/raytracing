@@ -10,8 +10,14 @@ pub trait Hittable {
     fn ray_hits(&self, ray: &Ray, max_dist: f32, verts: &[Vec3]) -> Option<f32>;
 }
 
+pub struct Light {
+    pub pos: Vec3,
+    pub color: Color
+}
+
 pub struct World {
     pub objects: Vec<PackedObject>,
+    pub lights: Vec<Light>,
     pub sun: Vec3,
 }
 

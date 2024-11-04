@@ -79,11 +79,10 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
 
     for obj in world.objects.iter() {
         if box_intersection_check(ray, &obj.obj.bounding_box) {
+            // TODO: Simplify this mofo
             for (idx, packed_bounds) in obj.packed_tri_bounds.iter().enumerate() {
-                //println!("{:?}", packed_bounds);
                 let (t_values, hit_mask) =
                     packed_bounds.intersect(&simd_ray, closest_splat);
-                //println!("{:x?}", hit_mask);
                 if hit_mask != 0xFF {
                     // At least 1 hit!
                     let t_arr = extract_f32_from_m256(t_values);
@@ -169,12 +168,34 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
         if hit_data.normal.dot(sun_dir) > 0.0 {
             for obj in world.objects.iter() {
                 if box_intersection_check(ray, &obj.obj.bounding_box) {
-                    for (_, packed) in obj.packed_tris.iter().enumerate() {
-                        let (_, hit_mask) =
-                            packed.intersect(&simd_ray, closest_splat);
+                    for (idx, packed_bounds) in obj.packed_tri_bounds.iter().enumerate() {
+                        let (t_values, hit_mask) =
+                            packed_bounds.intersect(&simd_ray, closest_splat);
                         if hit_mask != 0xFF {
-                            can_see_sun = false;
-                            break;
+                            let t_arr = extract_f32_from_m256(t_values);
+                            for i in 0..8 {
+                                if t_arr[i] > 0.0 {
+                                    let (_, hit_mask) =
+                                        obj.packed_tris[(idx*8)+i].intersect(&simd_ray, closest_splat);
+                                    if hit_mask != 0xFF {
+                                        can_see_sun = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if can_see_sun {
+                            break; // dont check next packed
+                        }
+                    }
+                    for (idx, bound) in obj.rest_bounds.iter().enumerate() {
+                        if box_intersection_check(&ray, bound) {
+                            let (_, hit_mask) =
+                                obj.packed_tris[(obj.packed_tri_bounds.len()*8)+idx].intersect(&simd_ray, closest_splat);
+                            if hit_mask != 0xFF {
+                                can_see_sun = false;
+                                break;
+                            }
                         }
                     }
                     if can_see_sun {
@@ -335,6 +356,7 @@ fn main() -> Result<(), Error> {
     );
     let mut world = World {
         objects,
+        lights: Vec::new(), // TODO
         sun: Vec3::new(0.0, 0.0, 0.0),
     };
 
