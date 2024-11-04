@@ -135,7 +135,6 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
             }
 
             let c = obj.rest_tri.len();
-
             for (idx, tri) in obj.rest_tri.iter().enumerate() {
                 if let Some(t) = tri.ray_hits(&ray, closest, &obj.obj.verts) {
                     if closest > t {
@@ -161,13 +160,12 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
             dir: sun_dir,
             inv_dir: sun_dir.recip(),
         };
-        //let closest_splat = unsafe { _mm256_set1_ps(f32::INFINITY) };
         let simd_ray = ray_to_avx(&sun_ray);
 
         // We do a little cheating
         if hit_data.normal.dot(sun_dir) > 0.0 {
             for obj in world.objects.iter() {
-                if box_intersection_check(ray, &obj.obj.bounding_box) {
+                if box_intersection_check(&sun_ray, &obj.obj.bounding_box) {
                     for (idx, packed_bounds) in obj.packed_tri_bounds.iter().enumerate() {
                         let (t_values, hit_mask) =
                             packed_bounds.intersect(&simd_ray, closest_splat);
@@ -185,11 +183,11 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                             }
                         }
                         if can_see_sun {
-                            break; // dont check next packed
+                            break; // dont check more packed
                         }
                     }
                     for (idx, bound) in obj.rest_bounds.iter().enumerate() {
-                        if box_intersection_check(&ray, bound) {
+                        if box_intersection_check(&sun_ray, bound) {
                             let (_, hit_mask) =
                                 obj.packed_tris[(obj.packed_tri_bounds.len()*8)+idx].intersect(&simd_ray, closest_splat);
                             if hit_mask != 0xFF {
@@ -202,13 +200,14 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                         can_see_sun = !obj
                             .rest_tri
                             .iter()
-                            .any(|tri| tri.ray_hits(ray, closest, &obj.obj.verts).is_some());
+                            .any(|tri| tri.ray_hits(&sun_ray, closest, &obj.obj.verts).is_some());
                     }
                     if !can_see_sun {
                         break;
                     }
                 }
             }
+
             if can_see_sun {
                 let light_power = hit_data.normal.dot(sun_dir); // Assuming light intensity 1
                 color = hit_data
