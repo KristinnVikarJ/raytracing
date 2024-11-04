@@ -1,4 +1,4 @@
-use std::{arch::x86_64::*, hint};
+use std::{arch::x86_64::*, hint, io::{stdout, Write}};
 
 use glam::Vec3;
 
@@ -99,9 +99,9 @@ pub fn pack_boxes(boxes: &[BoxShape]) -> PackedBoxes {
         ];
 
         let max = [
-            _mm256_loadu_ps(min_x.as_ptr()),
-            _mm256_loadu_ps(min_y.as_ptr()),
-            _mm256_loadu_ps(min_z.as_ptr()),
+            _mm256_loadu_ps(max_x.as_ptr()),
+            _mm256_loadu_ps(max_y.as_ptr()),
+            _mm256_loadu_ps(max_z.as_ptr()),
         ];
         PackedBoxes { min, max }
     }
@@ -171,11 +171,16 @@ fn inplace_avx_multi_sub(a: &mut [__m256; 3], b: [__m256; 3]) {
 }
 
 #[inline(always)]
-fn avx_multi_min(result: &mut [__m256; 3], a: [__m256; 3], b: [__m256; 3]) {
+fn avx_reduce_min(a: [__m256; 3]) -> __m256 {
     unsafe {
-        result[0] = _mm256_min_ps(a[0], b[0]);
-        result[1] = _mm256_min_ps(a[1], b[1]);
-        result[2] = _mm256_min_ps(a[2], b[2]);
+        _mm256_min_ps(a[0], _mm256_min_ps(a[1], a[2]))
+    }
+}
+
+#[inline(always)]
+fn avx_reduce_max(a: [__m256; 3]) -> __m256 {
+    unsafe {
+        _mm256_max_ps(a[0], _mm256_max_ps(a[1], a[2]))
     }
 }
 
@@ -185,6 +190,27 @@ fn inplace_avx_multi_max(a: &mut [__m256; 3], b: [__m256; 3]) {
         a[0] = _mm256_max_ps(a[0], b[0]);
         a[1] = _mm256_max_ps(a[1], b[1]);
         a[2] = _mm256_max_ps(a[2], b[2]);
+    }
+}
+#[inline(always)]
+fn avx_multi_max(a: [__m256; 3], b: [__m256; 3]) -> [__m256; 3] {
+    unsafe {
+        [
+            _mm256_max_ps(a[0], b[0]),
+            _mm256_max_ps(a[1], b[1]),
+            _mm256_max_ps(a[2], b[2])
+        ]
+    }
+}
+
+#[inline(always)]
+fn avx_multi_min(a: [__m256; 3], b: [__m256; 3]) -> [__m256; 3] {
+    unsafe {
+        [
+            _mm256_min_ps(a[0], b[0]),
+            _mm256_min_ps(a[1], b[1]),
+            _mm256_min_ps(a[2], b[2])
+        ]
     }
 }
 
@@ -209,6 +235,7 @@ fn inplace_avx_multi_mul(a: &mut [__m256; 3], b: [__m256; 3]) {
     }
 }
 
+#[inline(always)]
 pub fn extract_f32_from_m256(m: __m256) -> [f32; 8] {
     let mut result: [f32; 8] = [0.0; 8];
     unsafe {
@@ -220,7 +247,8 @@ pub fn extract_f32_from_m256(m: __m256) -> [f32; 8] {
 pub struct SimdRay {
     pub origin:  [__m256; 3],
     pub dir: [__m256; 3],
-    pub inv_dir: [__m256; 3]
+    pub inv_dir: [__m256; 3],
+    pub inv_sign_mask: [bool; 3], // sign bit mask for inv_dir
 }
 
 pub fn ray_to_avx(ray: &Ray) -> SimdRay {
@@ -237,10 +265,15 @@ pub fn ray_to_avx(ray: &Ray) -> SimdRay {
         let inv_dir_y = _mm256_set1_ps(ray.inv_dir.y);
         let inv_dir_z = _mm256_set1_ps(ray.inv_dir.z);
 
+        let inv_sign_x = ray.inv_dir.x.signum() == 1.0;
+        let inv_sign_y = ray.inv_dir.y.signum() == 1.0;
+        let inv_sign_z = ray.inv_dir.z.signum() == 1.0;
+
         SimdRay {
             origin: [origin_x, origin_y, origin_z],
             dir: [direction_x, direction_y, direction_z],
             inv_dir: [inv_dir_x, inv_dir_y, inv_dir_z],
+            inv_sign_mask: [inv_sign_x, inv_sign_y, inv_sign_z],
         }
     }
 }
@@ -297,20 +330,14 @@ impl PackedTriangles {
     }
 }
 
-/*
-pub fn box_intersection_check(ray: &Ray, check_box: &BoxShape) -> bool {
-    let t1 = (check_box.min - ray.origin) * ray.inv_dir;
-    let t2 = (check_box.max - ray.origin) * ray.inv_dir;
+const SWAP_TABLE: [[usize; 2]; 2] = [[1, 0], [0, 1]];
 
-    let tmin = t1.min(t2);
-    let tmax = t1.max(t2);
-
-    let t_near = tmin.x.max(tmin.y).max(tmin.z);
-    let t_far = tmax.x.min(tmax.y).min(tmax.z);
-
-    t_near.min(0.0) <= t_far
+unsafe fn avx_conditional_swap_in_place(ts: &mut [[__m256; 3]; 2], mask: [bool; 3]) {
+    // Branchless swapping
+    (ts[0][0], ts[1][0]) = (ts[SWAP_TABLE[mask[0] as usize][0]][0], ts[SWAP_TABLE[mask[0] as usize][1]][0]); // Swap
+    (ts[0][1], ts[1][1]) = (ts[SWAP_TABLE[mask[1] as usize][0]][1], ts[SWAP_TABLE[mask[1] as usize][1]][1]); // Swap
+    (ts[0][2], ts[1][2]) = (ts[SWAP_TABLE[mask[2] as usize][0]][2], ts[SWAP_TABLE[mask[2] as usize][1]][2]); // Swap
 }
-*/
 
 impl PackedBoxes {
     pub fn intersect(
@@ -324,38 +351,25 @@ impl PackedBoxes {
             avx_multi_sub(&mut t1, self.min, simd_ray.origin);
             inplace_avx_multi_mul(&mut t1, simd_ray.inv_dir);
 
-
             // let t2 = (check_box.max - ray.origin) * ray.inv_dir;
             let mut t2 = [_mm256_undefined_ps(); 3];
             avx_multi_sub(&mut t2, self.max, simd_ray.origin);
             inplace_avx_multi_mul(&mut t2, simd_ray.inv_dir);
+            
+            let mut tmp = [t1, t2];
+            avx_conditional_swap_in_place(&mut tmp, simd_ray.inv_sign_mask);
+            t1 = tmp[0];
+            t2 = tmp[1];
 
+            // Calculate tmin and tmax
+            let tmin = _mm256_max_ps(_mm256_max_ps(t1[0], t1[1]), t1[2]);
+            let tmax = _mm256_min_ps(_mm256_min_ps(_mm256_min_ps(t2[0], t2[1]), t2[2]), ray_length);            
 
-            // TODO: check if implementation is correct
-            // refer to https://tavianator.com/2022/ray_box_boundary.html
-
-            // let tmin = t1.min(t2);
-            let mut tmin = [_mm256_undefined_ps(); 3];
-            avx_multi_min(&mut tmin, t1, t2);
-
-            // inplace max, since this is the last time we use t1 & t2
-            // let tmax = t1.max(t2);
-            inplace_avx_multi_max(&mut t1, t2);
-            let tmax = t1;
-
-
-            // let t_near = tmin.x.max(tmin.y).max(tmin.z);
-            let t_near = _mm256_max_ps(tmin[0], _mm256_max_ps(tmin[1], tmin[2]));
-            let t_far = _mm256_min_ps(tmax[0], _mm256_min_ps(tmax[1], tmax[2]));
-
-
-            // t_near.min(0.0) <= t_far
-            let t_near = _mm256_min_ps(t_near, zero_m256());
-            let mask = _mm256_cmp_ps(t_near, t_far, _CMP_LE_OQ);
+            // Ensure tmin <= tmax for a valid intersection
+            let mask = _mm256_cmp_ps(tmin, tmax, _CMP_LE_OQ);
 
             // blend mask
             let t_results = _mm256_blendv_ps(minus_one_m256(), one_m256(), mask);
-            //println!("{:x?}", t_results);
             
             (t_results, _mm256_movemask_ps(t_results))
         }

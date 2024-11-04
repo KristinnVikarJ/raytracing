@@ -10,6 +10,9 @@ debug = true
 panic = "abort"
 opt-level = 3
 
+[profile.dev]
+opt-level = 1
+
 [dependencies]
 glam = "0.27.0"
 pixels = "0.13.0"

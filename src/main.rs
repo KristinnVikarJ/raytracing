@@ -94,44 +94,46 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                             if hit_mask != 0xFF {
                                 let t_arr = extract_f32_from_m256(t_values);
                                 // At least 1 hit!
-                                for i in 0..8 {
-                                    if t_arr[i] > 0.0 && closest > t_arr[i] {
-                                        closest = t_arr[i];
-                                        hit_tri = Some(obj.obj.tri_data[(idx * 8) + i].clone());
+                                for j in 0..8 {
+                                    if t_arr[j] > 0.0 && closest > t_arr[j] {
+                                        closest = t_arr[j];
+                                        hit_tri = Some(obj.obj.tri_data[(((idx*8)+i)*8) + j].clone());
                                         hit_obj = Some(obj);
                                         hit_position = Some(
-                                            ray.at(t_arr[i])
-                                                + (obj.obj.tri_data[(idx * 8) + i].normal * 0.00001),
+                                            ray.at(t_arr[j])
+                                                + (obj.obj.tri_data[(((idx*8)+i)*8) + j].normal * 0.00001),
                                         );
                                     }
                                 }
+                                closest_splat = unsafe { _mm256_set1_ps(closest) };
                             }
                         }
                     }
                 }
             }
-            /*
-            for (idx, packed) in obj.packed_tris.iter().enumerate() {
-                let (t_values, hit_mask) =
-                    packed.intersect(&simd_ray, closest_splat);
-                if hit_mask != 0xFF {
-                    let t_arr = extract_f32_from_m256(t_values);
-                    // At least 1 hit!
-                    for i in 0..8 {
-                        if t_arr[i] > 0.0 && closest > t_arr[i] {
-                            closest = t_arr[i];
-                            hit_tri = Some(obj.obj.tri_data[(idx * 8) + i].clone());
-                            hit_obj = Some(obj);
-                            hit_position = Some(
-                                ray.at(t_arr[i])
-                                    + (obj.obj.tri_data[(idx * 8) + i].normal * 0.00001),
-                            );
+            
+            for (idx, bound) in obj.rest_bounds.iter().enumerate() {
+                if box_intersection_check(&ray, bound) {
+                    let (t_values, hit_mask) =
+                        obj.packed_tris[(obj.packed_tri_bounds.len()*8)+idx].intersect(&simd_ray, closest_splat);
+                    if hit_mask != 0xFF {
+                        let t_arr = extract_f32_from_m256(t_values);
+                        // At least 1 hit!
+                        for i in 0..8 {
+                            if t_arr[i] > 0.0 && closest > t_arr[i] {
+                                closest = t_arr[i];
+                                hit_tri = Some(obj.obj.tri_data[(((obj.packed_tri_bounds.len()*8)+idx)*8) + i].clone());
+                                hit_obj = Some(obj);
+                                hit_position = Some(
+                                    ray.at(t_arr[i])
+                                        + (obj.obj.tri_data[(((obj.packed_tri_bounds.len()*8)+idx)*8) + i].normal * 0.00001),
+                                );
+                            }
                         }
+                        closest_splat = unsafe { _mm256_set1_ps(closest) };
                     }
                 }
-                closest_splat = unsafe { _mm256_set1_ps(closest) };
             }
-            */
 
             let c = obj.rest_tri.len();
 

@@ -28,7 +28,6 @@ pub struct PackedObject {
     pub obj: Object,
     pub packed_tris: Vec<PackedTriangles>,
     pub packed_tri_bounds: Vec<PackedBoxes>,
-    pub tri_bounds: Vec<BoxShape>,
     pub rest_tri: Vec<Triangle>,
     pub rest_bounds: Vec<BoxShape>,
 }
@@ -176,6 +175,7 @@ pub fn new_triangle(
     )
 }
 
+#[derive(Debug)]
 pub struct PackedTriangles {
     pub e1: [__m256; 3],
     pub e2: [__m256; 3],

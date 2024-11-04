@@ -73,7 +73,6 @@ pub fn pack_model(obj: Object) -> PackedObject {
     PackedObject {
         obj,
         packed_tris,
-        tri_bounds,
         rest_tri,
         rest_bounds,
         packed_tri_bounds,
