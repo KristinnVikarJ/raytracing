@@ -121,11 +121,47 @@ impl Color {
     }
 
     #[inline(always)]
+    pub fn mul_col(&self, val: &Color) -> Self {
+        Color {
+            r: self.r * val.r,
+            g: self.g * val.g,
+            b: self.b * val.b,
+        }
+    }
+
+    #[inline(always)]
+    pub fn div(&self, val: f32) -> Self {
+        Color {
+            r: self.r / val,
+            g: self.g / val,
+            b: self.b / val,
+        }
+    }
+
+    #[inline(always)]
     pub fn add(&self, rhs: Color) -> Self {
         Color {
             r: self.r + rhs.r,
             g: self.g + rhs.g,
             b: self.b + rhs.b,
+        }
+    }
+
+    #[inline(always)]
+    pub fn pow(&self, rhs: f32) -> Self {
+        Color {
+            r: self.r.powf(rhs),
+            g: self.g.powf(rhs),
+            b: self.b.powf(rhs),
+        }
+    }
+
+    pub fn normalize(&self) -> Self {
+        let div = self.r + self.g + self.b;
+        Color {
+            r: self.r / div,
+            g: self.g / div,
+            b: self.b / div,
         }
     }
 }
@@ -141,13 +177,15 @@ pub const SCREEN_BLACK: ScreenColor = ScreenColor { r: 0, g: 0, b: 0 };
 pub struct Material {
     pub albedo: f32,
     pub reflectivity: f32,
+    pub roughness: f32,
 }
 
 impl Material {
-    pub fn new(albedo: f32, reflectivity: f32) -> Self {
+    pub fn new(albedo: f32, reflectivity: f32, roughness: f32) -> Self {
         Material {
             albedo: albedo / std::f32::consts::PI,
             reflectivity,
+            roughness
         }
     }
 }

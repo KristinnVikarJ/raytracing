@@ -99,7 +99,7 @@ mod tests {
             teapot_tris,
             teapot_tri_data,
             teapot_verts,
-            Material::new(1.0, 0.9),
+            Material::new(1.0, 0.9, 0.1),
         );
 
         optimize_model(&mut obj);

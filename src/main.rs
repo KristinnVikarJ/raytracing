@@ -10,9 +10,11 @@ use objects::{
 };
 use opt::{optimize_model, pack_model};
 use pixels::{Error, Pixels, SurfaceTexture};
+use rand::random;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use simd_accel::{extract_f32_from_m256, ray_to_avx};
 use std::arch::x86_64::_mm256_set1_ps;
+use std::f32::consts::PI;
 use std::fs::read_to_string;
 use std::{process, time::Instant};
 use winit::{
@@ -24,10 +26,14 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: usize = 600;
-const HEIGHT: usize = 600;
+const WIDTH: usize = 800;
+const HEIGHT: usize = 800;
 
 const SCALE: f32 = 1.0;
+
+const REFLECT_DEPTH: u8 = 4;
+const DIFFUSE_DEPTH: u8 = 2;
+const DIFFUSE_SCATT: u32 = 10; // How many new rays to scatter on ray hit
 
 pub fn read_obj(
     filename: &str,
@@ -65,7 +71,21 @@ pub fn read_obj(
     (tris, tris_data, verts)
 }
 
-fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
+fn get_tangent_vectors(norm: Vec3) -> (Vec3, Vec3) {
+    let arbitrary = if norm.z.abs() < 1e-6 {
+        Vec3::Z
+    } else {
+        Vec3::X
+    };
+
+    let tang1 = norm.cross(arbitrary).normalize();
+
+    let tang2 = norm.cross(tang1).normalize();
+
+    (tang1, tang2)
+}
+
+fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
     let mut hit_tri = None;
     let mut hit_position = None;
     let mut hit_obj = None;
@@ -162,6 +182,9 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
         };
         let simd_ray = ray_to_avx(&sun_ray);
 
+        let closest = f32::INFINITY;
+        let closest_splat = unsafe { _mm256_set1_ps(closest) };
+
         // We do a little cheating
         if hit_data.normal.dot(sun_dir) > 0.0 {
             for obj in world.objects.iter() {
@@ -182,10 +205,11 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                                 }
                             }
                         }
-                        if can_see_sun {
+                        if !can_see_sun {
                             break; // dont check more packed
                         }
                     }
+
                     for (idx, bound) in obj.rest_bounds.iter().enumerate() {
                         if box_intersection_check(&sun_ray, bound) {
                             let (_, hit_mask) =
@@ -212,32 +236,78 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> Color {
                 let light_power = hit_data.normal.dot(sun_dir); // Assuming light intensity 1
                 color = hit_data
                     .color
-                    .mul(light_power * inside_obj.obj.material.albedo * 2.2)
-                // 2.2 is gamma
+                    .mul(light_power * inside_obj.obj.material.albedo)
             }
         }
 
-        if depth < 4 && inside_obj.obj.material.reflectivity > 0.0 {
+        let mut reflect_color = Color::new(0.0, 0.0, 0.0);
+        if depth < REFLECT_DEPTH && inside_obj.obj.material.reflectivity > 0.0 {
             let reflection_dir = ray.dir - 2.0 * hit_data.normal * (ray.dir.dot(hit_data.normal));
-            color = color.mul(1.0 - inside_obj.obj.material.reflectivity);
-            color = color.add(
-                trace_ray(
+            let (col, dist) = trace_ray(
+                &Ray {
+                    origin: hit_pos,
+                    dir: reflection_dir,
+                    inv_dir: reflection_dir.recip(),
+                },
+                world,
+                depth + 1,
+            );
+            reflect_color = col
+                .mul(inside_obj.obj.material.reflectivity);
+        }
+
+        let mut diffuse_color = Color::new(0.0, 0.0, 0.0);
+        if depth < DIFFUSE_DEPTH {
+            for _ in 0..DIFFUSE_SCATT {
+                let sin_theta = random::<f32>().sqrt();
+                let cos_theta = (1.0f32 - sin_theta * sin_theta).sqrt();
+                let psi = random::<f32>() * 2.0 * PI;
+
+                // Calculate the components of the vector
+                let a = sin_theta * psi.cos();
+                let b = sin_theta * psi.sin();
+                let c = cos_theta;
+
+                // Compute the velocity vector as v1 + v2 + v3
+                let (tang1, tang2) = get_tangent_vectors(hit_data.normal);
+                let vel = Vec3::new(
+                    a * tang1.x + b * tang2.x + c * hit_data.normal.x, 
+                    a * tang1.y + b * tang2.y + c * hit_data.normal.y,
+                    a * tang1.z + b * tang2.z + c * hit_data.normal.z
+                ).normalize();
+
+                let light_power = hit_data.normal.dot(vel);
+                let il = 1.0; // Light intensity
+
+                let (col, dist) = trace_ray(
                     &Ray {
                         origin: hit_pos,
-                        dir: reflection_dir,
-                        inv_dir: reflection_dir.recip(),
+                        dir: vel,
+                        inv_dir: vel.recip(),
                     },
                     world,
                     depth + 1,
-                )
-                .mul(inside_obj.obj.material.reflectivity),
-            );
+                );
+
+                diffuse_color = diffuse_color.add(
+                    col
+                    .mul_col(&hit_data.color)
+                    .mul(light_power * inside_obj.obj.material.roughness),
+                );
+            }
+            diffuse_color = diffuse_color.div(DIFFUSE_SCATT as f32);
         }
+        color = color.add(reflect_color);
+        color = color.add(diffuse_color);
     } else {
-        return Color::from_u8(0x87, 0xce, 0xeb);
+        return (Color::from_u8(0x87, 0xce, 0xeb), f32::INFINITY);
     }
 
-    color
+    if depth == 1 {
+        (color.pow(1.0/2.2), closest)
+    } else {
+        (color, closest)
+    }
 }
 
 fn draw(frame: &mut [u8], world: &World, _t: f32) {
@@ -250,15 +320,49 @@ fn draw(frame: &mut [u8], world: &World, _t: f32) {
             let mut row = [SCREEN_BLACK; WIDTH];
             for x in 0..WIDTH {
                 let xx =
-                    (2.0 * (x as f32 + 0.5) / (WIDTH as f32) - 1.0) * aspect_ratio as f32 * SCALE;
-                let yy = (1.0 - 2.0 * (y as f32 + 0.5) / HEIGHT as f32) * SCALE;
+                    (2.0 * (x as f32 + 0.25) / (WIDTH as f32) - 1.0) * aspect_ratio as f32 * SCALE;
+                let yy = (1.0 - 2.0 * (y as f32 + 0.25) / HEIGHT as f32) * SCALE;
 
                 let ray = Ray {
                     origin,
                     dir: Vec3::new(xx, yy, 1.0),
                     inv_dir: Vec3::new(xx, yy, 1.0).recip(),
                 };
-                row[x] = ScreenColor::from(trace_ray(&ray, world, 1));
+                let (col, _) = trace_ray(&ray, world, 1);
+
+                // Sample 2
+                let xx =
+                    (2.0 * (x as f32 + 0.75) / (WIDTH as f32) - 1.0) * aspect_ratio as f32 * SCALE;
+                let yy = (1.0 - 2.0 * (y as f32 + 0.75) / HEIGHT as f32) * SCALE;
+                let ray = Ray {
+                    origin,
+                    dir: Vec3::new(xx, yy, 1.0),
+                    inv_dir: Vec3::new(xx, yy, 1.0).recip(),
+                };
+                let (col2, _) = trace_ray(&ray, world, 1);
+
+                // Sample 3
+                let xx =
+                    (2.0 * (x as f32 + 0.25) / (WIDTH as f32) - 1.0) * aspect_ratio as f32 * SCALE;
+                let yy = (1.0 - 2.0 * (y as f32 + 0.75) / HEIGHT as f32) * SCALE;
+                let ray = Ray {
+                    origin,
+                    dir: Vec3::new(xx, yy, 1.0),
+                    inv_dir: Vec3::new(xx, yy, 1.0).recip(),
+                };
+                let (col3, _) = trace_ray(&ray, world, 1);
+
+                // Sample 4
+                let xx =
+                    (2.0 * (x as f32 + 0.75) / (WIDTH as f32) - 1.0) * aspect_ratio as f32 * SCALE;
+                let yy = (1.0 - 2.0 * (y as f32 + 0.25) / HEIGHT as f32) * SCALE;
+                let ray = Ray {
+                    origin,
+                    dir: Vec3::new(xx, yy, 1.0),
+                    inv_dir: Vec3::new(xx, yy, 1.0).recip(),
+                };
+                let (col4, _) = trace_ray(&ray, world, 1);
+                row[x] = ScreenColor::from(col.add(col2).add(col3).add(col4).div(4.0)); // AVG of 2 samples
             }
             row
         })
@@ -314,13 +418,13 @@ fn main() -> Result<(), Error> {
         teapot_tris,
         teapot_tri_data,
         teapot_verts,
-        Material::new(1.0, 0.9),
+        Material::new(1.0, 0.9, 0.1),
     ));
     objects.push(Object::from(
         teapot2_tris,
         teapot2_tri_data,
         teapot2_verts,
-        Material::new(1.0, 0.1),
+        Material::new(1.0, 0.025, 0.975),
     ));
     objects.push(Object::from(
         vec![Triangle { a: 0, b: 1, c: 2 }, Triangle { a: 0, b: 3, c: 2 }],
@@ -330,17 +434,17 @@ fn main() -> Result<(), Error> {
                 normal: Vec3::new(0.0, 1.0, 0.0),
             },
             TriangleData {
-                color: Color::from_u8(0, 128, 0),
+                color: Color::from_u8(128, 128, 128),
                 normal: Vec3::new(0.0, 1.0, 0.0),
             },
         ],
         vec![
-            Vec3::new(-10000.0, -5.0, -10000.0),
-            Vec3::new(-10000.0, -5.0, 10000.0),
-            Vec3::new(10000.0, -5.0, 10000.0),
-            Vec3::new(10000.0, -5.0, -10000.0),
+            Vec3::new(-10000.0, -3.0, -10000.0),
+            Vec3::new(-10000.0, -3.0, 10000.0),
+            Vec3::new(10000.0, -3.0, 10000.0),
+            Vec3::new(10000.0, -3.0, -10000.0),
         ],
-        Material::new(1.0, 0.0),
+        Material::new(1.0, 0.0, 1.0),
     ));
 
     for obj in objects.iter_mut() {

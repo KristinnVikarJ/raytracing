@@ -1,4 +1,4 @@
-use std::{arch::x86_64::*, hint, io::{stdout, Write}};
+use std::{arch::x86_64::*, hint};
 
 use glam::Vec3;
 
@@ -332,7 +332,7 @@ impl PackedTriangles {
 
 const SWAP_TABLE: [[usize; 2]; 2] = [[1, 0], [0, 1]];
 
-unsafe fn avx_conditional_swap_in_place(ts: &mut [[__m256; 3]; 2], mask: [bool; 3]) {
+fn avx_conditional_swap_in_place(ts: &mut [[__m256; 3]; 2], mask: [bool; 3]) {
     // Branchless swapping
     (ts[0][0], ts[1][0]) = (ts[SWAP_TABLE[mask[0] as usize][0]][0], ts[SWAP_TABLE[mask[0] as usize][1]][0]); // Swap
     (ts[0][1], ts[1][1]) = (ts[SWAP_TABLE[mask[1] as usize][0]][1], ts[SWAP_TABLE[mask[1] as usize][1]][1]); // Swap
