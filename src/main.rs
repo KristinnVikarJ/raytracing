@@ -12,7 +12,7 @@ use opt::{optimize_model, pack_model};
 use pixels::{Error, Pixels, SurfaceTexture};
 use rand::random;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use simd_accel::{extract_f32_from_m256, ray_to_avx};
+use simd_accel::{extract_f32_from_m256, ray_to_avx, SimdHittable};
 use std::arch::x86_64::_mm256_set1_ps;
 use std::f32::consts::PI;
 use std::fs::read_to_string;
@@ -101,26 +101,29 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
         if box_intersection_check(ray, &obj.obj.bounding_box) {
             // TODO: Simplify this mofo
             for (idx, packed_bounds) in obj.packed_tri_bounds.iter().enumerate() {
-                let (t_values, hit_mask) =
-                    packed_bounds.intersect(&simd_ray, closest_splat);
+                let (t_values, hit_mask) = packed_bounds.intersect(&simd_ray, closest_splat);
                 if hit_mask != 0xFF {
                     // At least 1 hit!
                     let t_arr = extract_f32_from_m256(t_values);
                     for i in 0..8 {
                         if t_arr[i] > 0.0 {
                             let (t_values, hit_mask) =
-                                obj.packed_tris[(idx*8)+i].intersect(&simd_ray, closest_splat);
+                                obj.packed_tris[(idx * 8) + i].intersect(&simd_ray, closest_splat);
                             if hit_mask != 0xFF {
                                 let t_arr = extract_f32_from_m256(t_values);
                                 // At least 1 hit!
                                 for j in 0..8 {
                                     if t_arr[j] > 0.0 && closest > t_arr[j] {
                                         closest = t_arr[j];
-                                        hit_tri = Some(obj.obj.tri_data[(((idx*8)+i)*8) + j].clone());
+                                        hit_tri = Some(
+                                            obj.obj.tri_data[(((idx * 8) + i) * 8) + j].clone(),
+                                        );
                                         hit_obj = Some(obj);
                                         hit_position = Some(
                                             ray.at(t_arr[j])
-                                                + (obj.obj.tri_data[(((idx*8)+i)*8) + j].normal * 0.00001),
+                                                + (obj.obj.tri_data[(((idx * 8) + i) * 8) + j]
+                                                    .normal
+                                                    * 0.00001),
                                         );
                                     }
                                 }
@@ -130,22 +133,30 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
                     }
                 }
             }
-            
+
             for (idx, bound) in obj.rest_bounds.iter().enumerate() {
                 if box_intersection_check(&ray, bound) {
-                    let (t_values, hit_mask) =
-                        obj.packed_tris[(obj.packed_tri_bounds.len()*8)+idx].intersect(&simd_ray, closest_splat);
+                    let (t_values, hit_mask) = obj.packed_tris
+                        [(obj.packed_tri_bounds.len() * 8) + idx]
+                        .intersect(&simd_ray, closest_splat);
                     if hit_mask != 0xFF {
                         let t_arr = extract_f32_from_m256(t_values);
                         // At least 1 hit!
                         for i in 0..8 {
                             if t_arr[i] > 0.0 && closest > t_arr[i] {
                                 closest = t_arr[i];
-                                hit_tri = Some(obj.obj.tri_data[(((obj.packed_tri_bounds.len()*8)+idx)*8) + i].clone());
+                                hit_tri = Some(
+                                    obj.obj.tri_data
+                                        [(((obj.packed_tri_bounds.len() * 8) + idx) * 8) + i]
+                                        .clone(),
+                                );
                                 hit_obj = Some(obj);
                                 hit_position = Some(
                                     ray.at(t_arr[i])
-                                        + (obj.obj.tri_data[(((obj.packed_tri_bounds.len()*8)+idx)*8) + i].normal * 0.00001),
+                                        + (obj.obj.tri_data
+                                            [(((obj.packed_tri_bounds.len() * 8) + idx) * 8) + i]
+                                            .normal
+                                            * 0.00001),
                                 );
                             }
                         }
@@ -196,8 +207,8 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
                             let t_arr = extract_f32_from_m256(t_values);
                             for i in 0..8 {
                                 if t_arr[i] > 0.0 {
-                                    let (_, hit_mask) =
-                                        obj.packed_tris[(idx*8)+i].intersect(&simd_ray, closest_splat);
+                                    let (_, hit_mask) = obj.packed_tris[(idx * 8) + i]
+                                        .intersect(&simd_ray, closest_splat);
                                     if hit_mask != 0xFF {
                                         can_see_sun = false;
                                         break;
@@ -212,8 +223,9 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
 
                     for (idx, bound) in obj.rest_bounds.iter().enumerate() {
                         if box_intersection_check(&sun_ray, bound) {
-                            let (_, hit_mask) =
-                                obj.packed_tris[(obj.packed_tri_bounds.len()*8)+idx].intersect(&simd_ray, closest_splat);
+                            let (_, hit_mask) = obj.packed_tris
+                                [(obj.packed_tri_bounds.len() * 8) + idx]
+                                .intersect(&simd_ray, closest_splat);
                             if hit_mask != 0xFF {
                                 can_see_sun = false;
                                 break;
@@ -252,8 +264,7 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
                 world,
                 depth + 1,
             );
-            reflect_color = col
-                .mul(inside_obj.obj.material.reflectivity);
+            reflect_color = col.mul(inside_obj.obj.material.reflectivity);
         }
 
         let mut diffuse_color = Color::new(0.0, 0.0, 0.0);
@@ -271,10 +282,11 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
                 // Compute the velocity vector as v1 + v2 + v3
                 let (tang1, tang2) = get_tangent_vectors(hit_data.normal);
                 let vel = Vec3::new(
-                    a * tang1.x + b * tang2.x + c * hit_data.normal.x, 
+                    a * tang1.x + b * tang2.x + c * hit_data.normal.x,
                     a * tang1.y + b * tang2.y + c * hit_data.normal.y,
-                    a * tang1.z + b * tang2.z + c * hit_data.normal.z
-                ).normalize();
+                    a * tang1.z + b * tang2.z + c * hit_data.normal.z,
+                )
+                .normalize();
 
                 let light_power = hit_data.normal.dot(vel);
                 let il = 1.0; // Light intensity
@@ -290,9 +302,8 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
                 );
 
                 diffuse_color = diffuse_color.add(
-                    col
-                    .mul_col(&hit_data.color)
-                    .mul(light_power * inside_obj.obj.material.roughness),
+                    col.mul_col(&hit_data.color)
+                        .mul(light_power * inside_obj.obj.material.roughness),
                 );
             }
             diffuse_color = diffuse_color.div(DIFFUSE_SCATT as f32);
@@ -304,7 +315,7 @@ fn trace_ray(ray: &Ray, world: &World, depth: u8) -> (Color, f32) {
     }
 
     if depth == 1 {
-        (color.pow(1.0/2.2), closest)
+        (color.pow(1.0 / 2.2), closest)
     } else {
         (color, closest)
     }
@@ -362,7 +373,8 @@ fn draw(frame: &mut [u8], world: &World, _t: f32) {
                     inv_dir: Vec3::new(xx, yy, 1.0).recip(),
                 };
                 let (col4, _) = trace_ray(&ray, world, 1);
-                row[x] = ScreenColor::from(col.add(col2).add(col3).add(col4).div(4.0)); // AVG of 2 samples
+                row[x] = ScreenColor::from(col.add(col2).add(col3).add(col4).div(4.0));
+                // AVG of 2 samples
             }
             row
         })

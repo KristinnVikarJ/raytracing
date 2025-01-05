@@ -3,8 +3,8 @@ use core::f32;
 use glam::Vec3;
 
 use crate::{
-    objects::{BoxShape, PackedObject},
-    simd_accel::{pack_boxes, pack_triangles},
+    objects::{BoxShape, Either, PackedObject, TieredPackedObject},
+    simd_accel::{pack_boxes, pack_tiered_bounds, pack_triangles},
     Object, Triangle,
 };
 
@@ -77,6 +77,76 @@ pub fn pack_model(obj: Object) -> PackedObject {
         rest_bounds,
         packed_tri_bounds,
     }
+}
+
+pub fn pack_tiered(obj: Object) -> TieredPackedObject {
+    let mut packed_tris = Vec::new();
+    let mut tri_bounds = Vec::new();
+    let mut packed_tri_bounds = Vec::new();
+
+    for k in 0..obj.tris.len() / 8 {
+        let packed = pack_triangles(&obj.tris[k * 8..(k + 1) * 8], &obj.verts);
+
+        // Calculate AABB for this batch of packed triangles
+        let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for tri in obj.tris[k * 8..(k + 1) * 8].iter() {
+            let tri_min = obj.verts[tri.a as usize]
+                .min(obj.verts[tri.b as usize])
+                .min(obj.verts[tri.c as usize]);
+            let tri_max = obj.verts[tri.a as usize]
+                .max(obj.verts[tri.b as usize])
+                .max(obj.verts[tri.c as usize]);
+            min = min.min(tri_min);
+            max = max.max(tri_max);
+        }
+
+        tri_bounds.push(BoxShape { min, max });
+        packed_tris.push(packed);
+    }
+
+    let mut bleh = Vec::new();
+    let mut rest_tri = Vec::new();
+    let mut rest_bounds = Vec::new();
+    rest_tri.extend_from_slice(&obj.tris[(obj.tris.len() / 8) * 8..obj.tris.len()]);
+    rest_bounds.extend(
+        tri_bounds[(tri_bounds.len() / 8) * 8..tri_bounds.len()]
+            .iter()
+            .enumerate()
+            .map(|(idx, bound)| (bound.clone(), packed_tris[idx].clone())),
+    );
+
+    for k in 0..tri_bounds.len() / 8 {
+        let packed = pack_boxes(&tri_bounds[k * 8..(k + 1) * 8]);
+        bleh.push(TieredPackedObject {
+            children: Either::A(Vec::from(&packed_tris[k * 8..(k + 1) * 8])),
+            bounds: packed.clone(),
+            rest: None,
+        });
+        packed_tri_bounds.push(packed);
+    }
+    let l = bleh.len();
+    bleh[l - 1].rest = Some(Either::A(rest_bounds));
+
+    while bleh.len() > 0 {
+        let tmp = bleh;
+        bleh = Vec::new();
+
+        for k in 0..tmp.len() / 8 {
+            let bounds = pack_tiered_bounds(&tmp[k * 8..(k + 1) * 8]);
+            bleh.push(TieredPackedObject {
+                children: Either::B(Vec::from(&tmp[k * 8..(k + 1) * 8])),
+                bounds,
+                rest: None
+            });
+        }
+        if tmp.len() > 0 {
+            let l = bleh.len();
+            bleh[l - 1].rest = Some(Either::B(tmp));
+        }
+    }
+
+    bleh.pop().unwrap()
 }
 
 #[cfg(test)]

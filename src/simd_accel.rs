@@ -2,7 +2,7 @@ use std::{arch::x86_64::*, hint};
 
 use glam::Vec3;
 
-use crate::objects::{BoxShape, PackedBoxes, PackedTriangles, Ray, Triangle};
+use crate::objects::{BoxShape, PackedBoxes, PackedTriangles, Ray, TieredPackedObject, Triangle};
 
 #[inline(always)]
 pub fn pack_triangles(triangles: &[Triangle], verts: &[Vec3]) -> PackedTriangles {
@@ -107,6 +107,56 @@ pub fn pack_boxes(boxes: &[BoxShape]) -> PackedBoxes {
     }
 }
 
+fn get_min(vals: __m256) -> f32 {
+    extract_f32_from_m256(vals).into_iter().min_by(|a,b| a.total_cmp(b)).unwrap()
+}
+
+fn get_max(vals: __m256) -> f32 {
+    extract_f32_from_m256(vals).into_iter().max_by(|a,b| a.total_cmp(b)).unwrap()
+}
+
+#[inline(always)]
+pub fn pack_tiered_bounds(boxes: &[TieredPackedObject]) -> PackedBoxes {
+    // Initialize arrays to hold 8 values for each coordinate component
+    let mut min_x = [0.0; 8];
+    let mut min_y = [0.0; 8];
+    let mut min_z = [0.0; 8];
+    let mut max_x = [0.0; 8];
+    let mut max_y = [0.0; 8];
+    let mut max_z = [0.0; 8];
+
+    if boxes.len() != 8 {
+        unsafe { hint::unreachable_unchecked() }
+    }
+
+    for i in 0..8 {
+        let min = boxes[i].bounds.min;
+        min_x[i] = get_min(min[0]);
+        min_y[i] = get_min(min[1]);
+        min_z[i] = get_min(min[2]);
+
+        let max = boxes[i].bounds.max;
+        max_x[i] = get_max(max[0]);
+        max_y[i] = get_max(max[1]);
+        max_z[i] = get_max(max[2]);
+    }
+    unsafe {
+        // Create __m256 vectors from the arrays
+        let min = [
+            _mm256_loadu_ps(min_x.as_ptr()),
+            _mm256_loadu_ps(min_y.as_ptr()),
+            _mm256_loadu_ps(min_z.as_ptr()),
+        ];
+
+        let max = [
+            _mm256_loadu_ps(max_x.as_ptr()),
+            _mm256_loadu_ps(max_y.as_ptr()),
+            _mm256_loadu_ps(max_z.as_ptr()),
+        ];
+        PackedBoxes { min, max }
+    }
+}
+
 #[inline(always)]
 fn one_m256() -> __m256 {
     unsafe { _mm256_set1_ps(1.0) }
@@ -172,16 +222,12 @@ fn inplace_avx_multi_sub(a: &mut [__m256; 3], b: [__m256; 3]) {
 
 #[inline(always)]
 fn avx_reduce_min(a: [__m256; 3]) -> __m256 {
-    unsafe {
-        _mm256_min_ps(a[0], _mm256_min_ps(a[1], a[2]))
-    }
+    unsafe { _mm256_min_ps(a[0], _mm256_min_ps(a[1], a[2])) }
 }
 
 #[inline(always)]
 fn avx_reduce_max(a: [__m256; 3]) -> __m256 {
-    unsafe {
-        _mm256_max_ps(a[0], _mm256_max_ps(a[1], a[2]))
-    }
+    unsafe { _mm256_max_ps(a[0], _mm256_max_ps(a[1], a[2])) }
 }
 
 #[inline(always)]
@@ -198,7 +244,7 @@ fn avx_multi_max(a: [__m256; 3], b: [__m256; 3]) -> [__m256; 3] {
         [
             _mm256_max_ps(a[0], b[0]),
             _mm256_max_ps(a[1], b[1]),
-            _mm256_max_ps(a[2], b[2])
+            _mm256_max_ps(a[2], b[2]),
         ]
     }
 }
@@ -209,7 +255,7 @@ fn avx_multi_min(a: [__m256; 3], b: [__m256; 3]) -> [__m256; 3] {
         [
             _mm256_min_ps(a[0], b[0]),
             _mm256_min_ps(a[1], b[1]),
-            _mm256_min_ps(a[2], b[2])
+            _mm256_min_ps(a[2], b[2]),
         ]
     }
 }
@@ -245,7 +291,7 @@ pub fn extract_f32_from_m256(m: __m256) -> [f32; 8] {
 }
 
 pub struct SimdRay {
-    pub origin:  [__m256; 3],
+    pub origin: [__m256; 3],
     pub dir: [__m256; 3],
     pub inv_dir: [__m256; 3],
     pub inv_sign_mask: [bool; 3], // sign bit mask for inv_dir
@@ -278,12 +324,12 @@ pub fn ray_to_avx(ray: &Ray) -> SimdRay {
     }
 }
 
-impl PackedTriangles {
-    pub fn intersect(
-        &self,
-        simd_ray: &SimdRay,
-        ray_length: __m256,
-    ) -> (__m256, i32) {
+pub trait SimdHittable {
+    fn intersect(&self, simd_ray: &SimdRay, ray_length: __m256) -> (__m256, i32);
+}
+
+impl SimdHittable for PackedTriangles {
+    fn intersect(&self, simd_ray: &SimdRay, ray_length: __m256) -> (__m256, i32) {
         unsafe {
             let mut q = [_mm256_undefined_ps(); 3];
             avx_multi_cross(&mut q, simd_ray.dir, self.e2);
@@ -334,17 +380,22 @@ const SWAP_TABLE: [[usize; 2]; 2] = [[1, 0], [0, 1]];
 
 fn avx_conditional_swap_in_place(ts: &mut [[__m256; 3]; 2], mask: [bool; 3]) {
     // Branchless swapping
-    (ts[0][0], ts[1][0]) = (ts[SWAP_TABLE[mask[0] as usize][0]][0], ts[SWAP_TABLE[mask[0] as usize][1]][0]); // Swap
-    (ts[0][1], ts[1][1]) = (ts[SWAP_TABLE[mask[1] as usize][0]][1], ts[SWAP_TABLE[mask[1] as usize][1]][1]); // Swap
-    (ts[0][2], ts[1][2]) = (ts[SWAP_TABLE[mask[2] as usize][0]][2], ts[SWAP_TABLE[mask[2] as usize][1]][2]); // Swap
+    (ts[0][0], ts[1][0]) = (
+        ts[SWAP_TABLE[mask[0] as usize][0]][0],
+        ts[SWAP_TABLE[mask[0] as usize][1]][0],
+    ); // Swap
+    (ts[0][1], ts[1][1]) = (
+        ts[SWAP_TABLE[mask[1] as usize][0]][1],
+        ts[SWAP_TABLE[mask[1] as usize][1]][1],
+    ); // Swap
+    (ts[0][2], ts[1][2]) = (
+        ts[SWAP_TABLE[mask[2] as usize][0]][2],
+        ts[SWAP_TABLE[mask[2] as usize][1]][2],
+    ); // Swap
 }
 
-impl PackedBoxes {
-    pub fn intersect(
-        &self,
-        simd_ray: &SimdRay,
-        ray_length: __m256,
-    ) -> (__m256, i32) {
+impl SimdHittable for PackedBoxes {
+    fn intersect(&self, simd_ray: &SimdRay, ray_length: __m256) -> (__m256, i32) {
         unsafe {
             // let t1 = (check_box.min - ray.origin) * ray.inv_dir;
             let mut t1 = [_mm256_undefined_ps(); 3];
@@ -355,7 +406,7 @@ impl PackedBoxes {
             let mut t2 = [_mm256_undefined_ps(); 3];
             avx_multi_sub(&mut t2, self.max, simd_ray.origin);
             inplace_avx_multi_mul(&mut t2, simd_ray.inv_dir);
-            
+
             let mut tmp = [t1, t2];
             avx_conditional_swap_in_place(&mut tmp, simd_ray.inv_sign_mask);
             t1 = tmp[0];
@@ -363,14 +414,17 @@ impl PackedBoxes {
 
             // Calculate tmin and tmax
             let tmin = _mm256_max_ps(_mm256_max_ps(t1[0], t1[1]), t1[2]);
-            let tmax = _mm256_min_ps(_mm256_min_ps(_mm256_min_ps(t2[0], t2[1]), t2[2]), ray_length);            
+            let tmax = _mm256_min_ps(
+                _mm256_min_ps(_mm256_min_ps(t2[0], t2[1]), t2[2]),
+                ray_length,
+            );
 
             // Ensure tmin <= tmax for a valid intersection
             let mask = _mm256_cmp_ps(tmin, tmax, _CMP_LE_OQ);
 
             // blend mask
             let t_results = _mm256_blendv_ps(minus_one_m256(), one_m256(), mask);
-            
+
             (t_results, _mm256_movemask_ps(t_results))
         }
     }

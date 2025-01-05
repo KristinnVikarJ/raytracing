@@ -1,6 +1,9 @@
+use core::f32;
 use std::arch::x86_64::__m256;
 
 use glam::Vec3;
+
+use crate::simd_accel::{extract_f32_from_m256, SimdHittable, SimdRay};
 
 pub fn calculate_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     (b - a).cross(c - a).normalize()
@@ -12,7 +15,7 @@ pub trait Hittable {
 
 pub struct Light {
     pub pos: Vec3,
-    pub color: Color
+    pub color: Color,
 }
 
 pub struct World {
@@ -185,7 +188,7 @@ impl Material {
         Material {
             albedo: albedo / std::f32::consts::PI,
             reflectivity,
-            roughness
+            roughness,
         }
     }
 }
@@ -219,17 +222,69 @@ pub fn new_triangle(
     )
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PackedTriangles {
     pub e1: [__m256; 3],
     pub e2: [__m256; 3],
     pub v0: [__m256; 3],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PackedBoxes {
     pub min: [__m256; 3],
     pub max: [__m256; 3],
+}
+
+#[derive(Clone)]
+pub enum Either<A, B> {
+    A(A),
+    B(B),
+}
+
+#[derive(Clone)]
+pub struct TieredPackedObject {
+    pub bounds: PackedBoxes,
+    pub rest: Option<Either<Vec<(BoxShape, PackedTriangles)>, Vec<TieredPackedObject>>>,
+    pub children: Either<Vec<PackedTriangles>, Vec<TieredPackedObject>>, // TODO: make 8-sized arrays instead
+}
+
+impl TieredPackedObject {
+    pub fn intersect(&self, simd_ray: &SimdRay, ray_length: __m256) -> (bool, usize) {
+        let (t_values, mask) = self.bounds.intersect(simd_ray, ray_length);
+
+        if mask != 0xFF {
+            let t_arr = extract_f32_from_m256(t_values);
+            let mut closest = f32::INFINITY;
+            let mut best: Option<(bool, usize)> = None;
+            for i in 0..8 {
+                if t_arr[i] > 0.0 && t_arr[i] <= closest {
+                    let res = match &self.children {
+                        Either::A(tris) => {
+                            let (t_values, mask) = tris[i].intersect(simd_ray, ray_length);
+                            let mut inner_closest = f32::INFINITY;
+                            let t_arr = extract_f32_from_m256(t_values);
+                            let mut idx = 0;
+                            if mask != 0xFF {
+                                for j in 0..8 {
+                                    if t_arr[j] > 0.0 && t_arr[j] < inner_closest {
+                                        idx = j;
+                                        inner_closest = t_arr[j];
+                                    }
+                                }
+                            }
+                            (idx > 0, idx)
+                        }
+                        Either::B(obj) => obj[i].intersect(simd_ray, ray_length),
+                    };
+                    best = Some((true, (i * 8) + res.1));
+                    closest = t_arr[i];
+                }
+            }
+            best.unwrap_or((false, 0))
+        } else {
+            (false, 0)
+        }
+    }
 }
 
 #[derive(Clone)]
